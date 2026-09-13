@@ -112,10 +112,16 @@ export default async function check(page, { pageErrors, open }) {
   assert.ok(bracket && bracket.width > 8 && bracket.height > 4, `phase bracket: ${JSON.stringify(bracket)}`);
   assert.match(await page.locator('[data-timeline-part="phase"]').innerText(), /QA & Sample · parallel/);
 
-  // The compressed tail says how much time it is not showing.
+  // The compressed tail says how much time it is not showing: from the last
+  // shown milestone to `endDate`, which the entry pins to the day the check
+  // runs (a literal 282 held for the two days after the spec was written).
+  const pad = (n) => String(n).padStart(2, '0');
+  const today = new Date();
+  const todayISO = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+  const tailDays = Math.round((Date.parse(todayISO) - Date.parse('2025-12-03')) / 86_400_000);
   assert.match(
     await page.locator('[data-testid="mould"] [data-timeline-part="break"]').innerText(),
-    /282 days/,
+    new RegExp(`${tailDays} days`),
   );
 
   // ── The chrome both cards wear ────────────────────────────────────────────

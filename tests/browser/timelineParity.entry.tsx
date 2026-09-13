@@ -92,6 +92,15 @@ function Production() {
   );
 }
 
+// The mould card ends TODAY, whatever day the check runs on — the parity check
+// asserts the today marker sits at its right edge, and a date typed in on the
+// day the spec was written held for exactly two days.
+const todayISO = (() => {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+})();
+
 createRoot(document.getElementById('root')!).render(
   <div style={{ display: 'flex', flexDirection: 'column', gap: 32, width }}>
     <div data-testid="mould">
@@ -99,7 +108,7 @@ createRoot(document.getElementById('root')!).render(
         title="Mould development"
         subject="001F/1813"
         milestones={MOULD}
-        endDate="2026-09-11"
+        endDate={todayISO}
         phaseLabels={{ qa: 'QA & Sample' }}
       />
     </div>
