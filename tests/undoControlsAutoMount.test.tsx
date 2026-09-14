@@ -8,7 +8,7 @@
  * shows the pair as soon as the form registers state. These specs pin the
  * cases that decide whether that is one pair, no pair, or the wrong footer.
  */
-import { act, flush, render, waitFor } from './dom';
+import { act, flush, pressKey, render, waitFor } from './dom';
 import { useEffect, useState } from 'react';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -23,7 +23,8 @@ import { setShellWindowRegistry } from '../src/windowRegistry/types';
 
 const ENTITY_TYPE = 'undo-auto-entity';
 
-type Variant = 'form' | 'no-state' | 'own-mount' | 'read-only' | 'nested-provider' | 'child-dialog';
+type Variant = 'form' | 'no-state' | 'own-mount' | 'read-only' | 'nested-provider' | 'child-dialog'
+  | 'no-footer' | 'nested-read-only';
 let variant: Variant = 'form';
 
 /** One undoable field and a button that changes it — the smallest form. */
@@ -34,6 +35,26 @@ function Field() {
       <span data-testid="value">{value}</span>
       <button type="button" data-testid="set" onClick={() => setValue('typed')}>Set</button>
     </>
+  );
+}
+
+/** Every form has a submit in the footer — the pair joins that bar, it does
+ *  not create one, so the fixtures carry a primary action like a real form. */
+function Save() {
+  return <ModalActions><button type="button">Save</button></ModalActions>;
+}
+
+/** The SampleForm shape: the form's own state registers with the window's
+ *  stack (the hook runs in this component), and a nested read-only provider
+ *  opens only in the returned JSX. */
+function LockedForm() {
+  const [value, setValue] = useUndoableState('', { label: 'name' });
+  return (
+    <UndoProvider canEdit={false}>
+      <span data-testid="value">{value}</span>
+      <button type="button" data-testid="set" onClick={() => setValue('typed')}>Set</button>
+      <Save />
+    </UndoProvider>
   );
 }
 
@@ -59,12 +80,14 @@ function ChildDialog() {
 
 function Body() {
   switch (variant) {
-    case 'form': return <Field />;
-    case 'no-state': return <div data-testid="static">nothing to undo here</div>;
-    case 'own-mount': return <><ModalActions position="left"><UndoControls /></ModalActions><Field /></>;
-    case 'read-only': return <ReadOnlyField />;
-    case 'nested-provider': return <UndoProvider canEdit><Field /></UndoProvider>;
-    case 'child-dialog': return <ChildDialog />;
+    case 'form': return <><Field /><Save /></>;
+    case 'no-state': return <><div data-testid="static">nothing to undo here</div><Save /></>;
+    case 'own-mount': return <><ModalActions position="left"><UndoControls /></ModalActions><Field /><Save /></>;
+    case 'read-only': return <><ReadOnlyField /><Save /></>;
+    case 'nested-provider': return <UndoProvider canEdit><Field /><Save /></UndoProvider>;
+    case 'child-dialog': return <><ChildDialog /><Save /></>;
+    case 'no-footer': return <Field />;
+    case 'nested-read-only': return <LockedForm />;
   }
 }
 
@@ -147,12 +170,51 @@ test('a window whose content registers no state shows no controls', async (t) =>
   assert.equal(pairs(panel()).length, 0, 'no dead pair on a window with nothing to take back');
 });
 
-test('a form still mounting its own <UndoControls /> shows one pair, not two', async (t) => {
+test('a form still mounting its own <UndoControls /> shows one pair — its own', async (t) => {
   const { mounted, panel } = await openWindow('own-mount');
   t.after(() => mounted.unmount());
   const pair = pairs(panel());
   assert.equal(pair.length, 1, 'one pair');
-  assert.equal(pair[0].dataset.undoControls, 'shell', "the form's own mount stood down");
+  assert.equal(pair[0].dataset.undoControls, 'form', 'the form keeps the pair where it put it; the shell fills in only where there is none');
+});
+
+test('a window with no footer bar of its own does not grow one for the pair', async (t) => {
+  const { mounted, panel } = await openWindow('no-footer');
+  t.after(() => mounted.unmount());
+  assert.ok(panel().querySelector('[data-testid="value"]'), 'the field rendered');
+  assert.equal(pairs(panel()).length, 0, 'no footer, no pair — the layout of a footerless window is unchanged');
+});
+
+test('a nested read-only provider makes the window read-only: no pair, and ⌘Z is inert', async (t) => {
+  const { mounted, panel } = await openWindow('nested-read-only');
+  t.after(() => mounted.unmount());
+  assert.equal(pairs(panel()).length, 0, 'the outer stack holds the state, and the nested canEdit={false} reaches it');
+  click(panel().querySelector('[data-testid="set"]'), 'the Set button');
+  await flush();
+  pressKey('z', { meta: true });
+  await flush();
+  assert.equal(panel().querySelector('[data-testid="value"]')!.textContent, 'typed', 'nothing was recorded to step back to');
+});
+
+test('on the mobile chrome the shell mounts nothing, and a form\'s own pair still shows', async (t) => {
+  const real = window.matchMedia;
+  const mobile = (query: string) => ({ ...real(query), matches: true });
+  (window as unknown as { matchMedia: unknown }).matchMedia = mobile;
+  (globalThis as unknown as { matchMedia: unknown }).matchMedia = mobile;
+  t.after(() => {
+    (window as unknown as { matchMedia: unknown }).matchMedia = real;
+    (globalThis as unknown as { matchMedia: unknown }).matchMedia = real;
+  });
+
+  const a = await openWindow('form');
+  t.after(() => a.mounted.unmount());
+  assert.equal(pairs(a.panel()).length, 0, 'the footer is hidden on mobile, so nothing is mounted into it');
+
+  const b = await openWindow('own-mount');
+  t.after(() => b.mounted.unmount());
+  const pair = pairs(b.panel());
+  assert.equal(pair.length, 1, "the form's own mount is untouched");
+  assert.equal(pair[0].dataset.undoControls, 'form');
 });
 
 test('a form that says useUndoCanEdit(false) gets no controls, even with state registered', async (t) => {

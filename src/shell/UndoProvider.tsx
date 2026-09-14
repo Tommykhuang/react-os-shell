@@ -129,13 +129,27 @@ export function UndoProvider({ children, canEdit = true, perms, windowId }: Undo
     if (slices.current.delete(id)) setSliceCount(c => c - 1);
   }, []);
   const claimReadOnly = useCallback((on: boolean) => { setReadOnlyClaims(c => c + (on ? 1 : -1)); }, []);
-  // Whether a pair of Undo/Redo controls is on screen for this stack without
-  // the form having mounted one. Two renderers can put it there — see the
-  // return below and `Modal`'s footer — and `UndoControls` reads this to stand
-  // down when it is, so a form still carrying its own mount shows one pair.
-  const [autoMountClaims, setAutoMountClaims] = useState(0);
-  const autoMounted = autoMountClaims > 0;
-  const claimAutoMount = useCallback((on: boolean) => { setAutoMountClaims(c => c + (on ? 1 : -1)); }, []);
+  // Whether the form has mounted its own `<UndoControls />`. The shell fills
+  // in a pair only where there is none: a form written before the shell did
+  // this keeps its pair where it deliberately put it — a plain overlay with no
+  // window footer to portal into, say — and shows one, not two.
+  const [ownMountClaims, setOwnMountClaims] = useState(0);
+  const handMounted = ownMountClaims > 0;
+  const claimOwnMount = useCallback((on: boolean) => { setOwnMountClaims(c => c + (on ? 1 : -1)); }, []);
+  // A provider nested inside a window that is itself read-only says so to the
+  // stack above it. The form's own `useUndoableState` calls sit in the same
+  // component as the nested provider and so register with the OUTER stack; a
+  // nested `canEdit={false}` that only shadowed the children would leave that
+  // stack live — ⌘Z stepping a locked record, and the footer offering a pair
+  // for it. Forwarding the claim makes the documented pattern mean what it
+  // says: this window's record may not be edited.
+  const parent = useContext(UndoContext);
+  const parentClaimReadOnly = parent?.claimReadOnly;
+  useEffect(() => {
+    if (!parentClaimReadOnly || enabled) return;
+    parentClaimReadOnly(true);
+    return () => parentClaimReadOnly(false);
+  }, [parentClaimReadOnly, enabled]);
 
   // Runaway guard. A slice registered with a value that is freshly allocated
   // on every render — `useUndoable(rows.filter(r => r.on), ...)` rather than a
@@ -280,11 +294,11 @@ export function UndoProvider({ children, canEdit = true, perms, windowId }: Undo
 
   const value = useMemo<UndoContextValue>(() => ({
     register, unregister, record, undo, redo, clear, baseline, canUndo, canRedo, enabled,
-    hasState, autoMounted, claimAutoMount, claimReadOnly,
+    hasState, handMounted, claimOwnMount, claimReadOnly,
     undoLabel: canUndo ? state.past[state.past.length - 1].label : null,
     redoLabel: canRedo ? state.future[0].label : null,
   }), [register, unregister, record, undo, redo, clear, baseline, canUndo, canRedo, enabled,
-    hasState, autoMounted, claimAutoMount, claimReadOnly, state.past, state.future]);
+    hasState, handMounted, claimOwnMount, claimReadOnly, state.past, state.future]);
 
   // The controls are the shell's to show, not the form's to remember. A stack
   // with state in it and a user who may edit gets its Undo/Redo pair in the
@@ -295,12 +309,7 @@ export function UndoProvider({ children, canEdit = true, perms, windowId }: Undo
   // `WindowManager` mounts sits ABOVE the `<Modal>` and has no footer to reach,
   // so there the Modal reads this context and renders the pair itself.
   const insideModal = useEnclosingModalId() !== '';
-  const showsOwnControls = insideModal && enabled && hasState;
-  useEffect(() => {
-    if (!showsOwnControls) return;
-    claimAutoMount(true);
-    return () => claimAutoMount(false);
-  }, [showsOwnControls, claimAutoMount]);
+  const showsOwnControls = insideModal && enabled && hasState && !handMounted;
 
   return (
     <UndoContext.Provider value={value}>

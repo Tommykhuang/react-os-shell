@@ -1,4 +1,4 @@
-import { useContext } from 'react';
+import { useContext, useLayoutEffect } from 'react';
 import { CMD_Z, CMD_SHIFT_Z } from './Kbd';
 import { UndoContext } from './undoContext';
 
@@ -7,9 +7,10 @@ export interface UndoControlsProps {
   className?: string;
   /**
    * Set by the shell on the pair it mounts itself — the window footer's, or a
-   * nested provider's. A form's own `<UndoControls />` leaves it unset, and
-   * stands down while a shell-mounted pair is on screen for the same stack, so
-   * a form written before the shell did this shows one pair rather than two.
+   * nested provider's. A form's own `<UndoControls />` leaves it unset and
+   * claims the stack, and the shell then mounts nothing for it — so a form
+   * written before the shell did this keeps its pair where it put it, and
+   * shows one rather than two.
    */
   auto?: boolean;
 }
@@ -36,8 +37,15 @@ const BTN =
  */
 export default function UndoControls({ className = '', auto = false }: UndoControlsProps) {
   const ctx = useContext(UndoContext);
+  // Before paint, so the shell's pair never shows for a commit before the
+  // form's own takes its place.
+  const claimOwnMount = ctx?.claimOwnMount;
+  useLayoutEffect(() => {
+    if (auto || !claimOwnMount) return;
+    claimOwnMount(true);
+    return () => claimOwnMount(false);
+  }, [auto, claimOwnMount]);
   if (!ctx || !ctx.enabled) return null;
-  if (!auto && ctx.autoMounted) return null;
   const { undo, redo, canUndo, canRedo, undoLabel, redoLabel } = ctx;
   return (
     <div className={`flex items-center gap-2 ${className}`} data-undo-controls={auto ? 'shell' : 'form'}>

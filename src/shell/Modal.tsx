@@ -1411,25 +1411,22 @@ export default function Modal({ open, onClose, title, icon, copyText, size = 'lg
   // can't drift apart. Presence booleans rather than the nodes themselves:
   // consumer JSX props get a new identity every render and would thrash the
   // measurement effect's dependency array.
+  const hasFooterContent = !!(footer || actions || actionsLeft) || hasActions;
   // Undo/Redo for the window's form, shown by the shell rather than mounted
   // by the form. The stack is the one `WindowManager` mounts ABOVE this Modal
   // (`UndoProvider windowId={item.id}`), which is why the footer reads it
   // rather than the provider portalling in through `ModalActions` as a
   // provider nested inside a window does. Only the window's own Modal shows
   // it — a dialog a form opens is a Modal inside a Modal, and the enclosing id
-  // says so — and only once the form has registered state, so a list window or
-  // a detail with nothing to take back gets no dead pair.
+  // says so — only once the form has registered state, so a list window or a
+  // detail with nothing to take back gets no dead pair, and only where the
+  // form has not mounted a pair of its own. It joins a footer that is there
+  // for other reasons and never conjures one: a window that had no footer bar
+  // keeps having none, and the mobile chrome hides the footer altogether.
   const undoCtx = useContext(UndoContext);
   const nestedInWindow = useContext(ModalIdContext) !== '';
   const showsUndo = !!undoCtx && !nestedInWindow && undoCtx.enabled && undoCtx.hasState
-    && !widget && !compact && !appStyle;
-  const claimAutoMount = undoCtx?.claimAutoMount;
-  useEffect(() => {
-    if (!showsUndo || !claimAutoMount) return;
-    claimAutoMount(true);
-    return () => claimAutoMount(false);
-  }, [showsUndo, claimAutoMount]);
-  const hasFooterContent = !!(footer || actions || actionsLeft) || hasActions || showsUndo;
+    && !undoCtx.handMounted && hasFooterContent && !widget && !compact && !appStyle && !isMobile;
   // Every window must surface a clickable icon — it's the only entry point
   // to the window menu. Fall back to a generic "window" glyph when the
   // consumer hasn't supplied one. Consumer icons rarely include explicit

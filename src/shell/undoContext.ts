@@ -33,11 +33,12 @@ export interface UndoContextValue {
   /** True once any state is registered — the sign that this window has a form
    *  in it and so has something an Undo pair could act on. */
   hasState: boolean;
-  /** True while a pair of controls is on screen for this stack without the
-   *  form having mounted one — see `UndoControls`, which then yields to it. */
-  autoMounted: boolean;
-  /** Whoever renders that pair says so here, and takes it back on unmount. */
-  claimAutoMount: (on: boolean) => void;
+  /** True while the form has mounted its own `<UndoControls />` somewhere —
+   *  the shell then leaves the footer alone, so a form written before the
+   *  shell did this keeps its pair where it put it, and shows one. */
+  handMounted: boolean;
+  /** A hand-mounted `UndoControls` says so here, and takes it back on unmount. */
+  claimOwnMount: (on: boolean) => void;
   /** A form's own read-only claim — `useUndoCanEdit(false)` — counted rather
    *  than set, so two components saying it and one leaving do not re-enable. */
   claimReadOnly: (on: boolean) => void;
