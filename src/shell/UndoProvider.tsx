@@ -24,7 +24,7 @@ interface UndoContextValue {
   undo: () => void;
   redo: () => void;
   clear: () => void;
-  baseline: () => void;
+  baseline: (key?: string | number | null) => void;
   canUndo: boolean;
   canRedo: boolean;
   undoLabel: string | null;
@@ -249,7 +249,21 @@ export function UndoProvider({ children, canEdit = true, perms, windowId }: Undo
     suspendUntil.current = tokenCounter.current;
     setBaselineToken(tokenCounter.current);
   }, []);
-  const baseline = useCallback(() => { suspend(); }, [suspend]);
+  // The record the last baseline() named, when the caller names one. A
+  // different key is a switch to another record: whatever lands, the history
+  // belongs to the record that is going away and must not follow the user onto
+  // the new one — which is exactly what would happen if the new record's
+  // values equalled the old, since then nothing records and `seeded` stays
+  // false. A refetch of the same record passes the same key and gets the
+  // ordinary rule.
+  const baselineKey = useRef<string | number | null | undefined>(undefined);
+  const baseline = useCallback((key?: string | number | null) => {
+    if (key !== undefined) {
+      if (baselineKey.current !== undefined && key !== baselineKey.current) forceClear.current = true;
+      baselineKey.current = key;
+    }
+    suspend();
+  }, [suspend]);
 
   useEffect(() => {
     if (!suspended.current || baselineToken !== suspendUntil.current) return;
@@ -338,8 +352,15 @@ export interface UndoControlsApi {
    * Worth calling on every arrival, not just the first: a window kept open
    * across a refetch, or one whose entity changes underneath it, wants the
    * same treatment, and the call is idempotent for a form nobody has touched.
+   *
+   * A history is only ever dropped when a record actually lands (a slice takes
+   * a value while the baseline settles); a call on a refetch edge where the
+   * form's guard re-seeds nothing leaves the user's edits undoable. Name the
+   * record — `baseline(id)` — and a switch to another record drops the history
+   * even when the new record's values happen to equal the old, so an undo can
+   * never land on the wrong record.
    */
-  baseline: () => void;
+  baseline: (key?: string | number | null) => void;
   /** False when the user may not edit this record, so custom UI can hide
    *  itself the way `UndoControls` does. */
   enabled: boolean;

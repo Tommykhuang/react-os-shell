@@ -369,6 +369,66 @@ test('clear() after a save empties the history even though nothing on screen mov
   closeAllWindows();
 });
 
+/** A form that hydrates per record and names it — `baseline(id)`. */
+function KeyedForm({ api }: { api: Partial<FormApi & { arrive: (v: string, key: string) => void }> }) {
+  const [loaded, setLoaded] = useState<{ value: string; key: string } | null>(null);
+  const [name, setName] = useUndoableState('', { label: 'name' });
+  const { baseline } = useUndo();
+  api.set = setName;
+  api.arrive = (value, key) => setLoaded({ value, key });
+  useEffect(() => {
+    if (!loaded) return;
+    setName(loaded.value);
+    baseline(loaded.key);
+  }, [loaded, baseline, setName]);
+  return <span data-testid="value">{name}</span>;
+}
+
+test('baseline(key): switching records drops the history even when the new values equal the old', async () => {
+  openWindow('win-record-switch');
+  const api: Partial<FormApi & { arrive: (v: string, key: string) => void }> = {};
+  const r = render(<UndoProvider windowId="win-record-switch"><KeyedForm api={api} /></UndoProvider>);
+
+  act(() => { api.arrive!('first record', 'A'); });
+  await flush();
+  type(api, 'typed on A');
+  await flush();
+  // Record B arrives holding exactly what is on screen — nothing records.
+  act(() => { api.arrive!('typed on A', 'B'); });
+  await flush();
+  await flush();
+
+  pressKey('z', { meta: true });
+  await flush();
+  assert.equal(valueOf(r), 'typed on A', "record A's edit does not undo on record B");
+
+  r.unmount();
+  closeAllWindows();
+});
+
+test('baseline(key): a refetch of the same record with nothing landing keeps the history', async () => {
+  openWindow('win-record-refetch');
+  const api: Partial<FormApi & { arrive: (v: string, key: string) => void }> = {};
+  const r = render(<UndoProvider windowId="win-record-refetch"><KeyedForm api={api} /></UndoProvider>);
+
+  act(() => { api.arrive!('first record', 'A'); });
+  await flush();
+  type(api, 'typed on A');
+  await flush();
+  // Same record, same value as on screen (the form's guard would normally
+  // skip the set; here the set is a no-op for the slice either way).
+  act(() => { api.arrive!('typed on A', 'A'); });
+  await flush();
+  await flush();
+
+  pressKey('z', { meta: true });
+  await flush();
+  assert.equal(valueOf(r), 'first record', 'the edit is still there to undo');
+
+  r.unmount();
+  closeAllWindows();
+});
+
 // ── Recording ─────────────────────────────────────────────────────────────
 
 test('a re-render that changes nothing records no step', async () => {
