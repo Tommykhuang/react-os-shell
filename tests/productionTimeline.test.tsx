@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 // First — installs the DOM globals before react-dom evaluates.
 import { act, pressKey, render } from './dom';
+import { fakeFrames } from './frames';
 import ProductionTimeline, {
   useProductionTimeline,
   calcOverall,
@@ -21,6 +22,7 @@ import ProductionTimeline, {
   type ProductionTimelineSnapshot,
   type UseProductionTimelineOpts,
 } from '../src/shell/ProductionTimeline';
+import { type TimelineScrubProgress } from '../src/shell/TimelineTrack';
 import { DAY_MS, toDayMs } from '../src/shell/timelineDates';
 
 function item(part_number: string, order_qty: number, casting = 0, cnc = 0, painting = 0): ProgressItem {
@@ -173,6 +175,142 @@ test('the bar names the PO, states its window and lead time, and legends the kin
   assert.match(text, /Inspection/);
   assert.equal(container.querySelectorAll('button[aria-label^="PP-"]').length, 2, 'one dot per report');
   unmount();
+});
+
+// ── Playback ────────────────────────────────────────────────────────────────
+
+test('Play rewinds to the first report and travels to the next, one pixel at a time', () => {
+  // The card's half of the change: the button owns `playing` and the position of
+  // the thumb is the track's business. What is asserted here is the wiring —
+  // that a press rewinds, that the status line under the bar changes when the
+  // thumb ARRIVES somewhere and not while it is on its way, and that a second
+  // press freezes rather than settles.
+  const frames = fakeFrames();
+  function Bar() {
+    const snap = useProductionTimeline({ ...BASE, poStatus: 'completed' });
+    return <ProductionTimeline snapshot={snap} onPickReport={() => {}} />;
+  }
+  const view = render(<Bar />);
+  const at = (selector: string) => view.container.querySelector<HTMLElement>(selector)!;
+  const play = () => at('.rosh-tl-play');
+  const status = () => at('.rosh-tl-status').textContent ?? '';
+  const thumbLeft = () => parseFloat(at('[data-timeline-part="thumb"]').style.left);
+  const dotLeft = (label: string) =>
+    parseFloat(view.container.querySelector<HTMLElement>(`[aria-label^="${label}"]`)!.style.left);
+
+  try {
+    assert.match(status(), /Showing PP-2/, 'the card opens on the latest report');
+    act(() => { play().click(); });
+    assert.equal(play().textContent, 'Pause');
+    assert.equal(play().getAttribute('aria-pressed'), 'true');
+    assert.match(status(), /Showing PP-1/, 'a fresh run rewinds to the first report');
+    assert.equal(thumbLeft(), dotLeft('PP-1'));
+
+    frames.until(() => thumbLeft() > dotLeft('PP-1'), 'the thumb never set off');
+    frames.run(3, 16);
+    const travelling = thumbLeft();
+    assert.ok(travelling < dotLeft('PP-2'), 'it is between the two reports');
+    assert.match(status(), /Showing PP-1/, 'the status line does not tick while the thumb moves');
+    assert.doesNotMatch(status(), /Estimated/, 'and it never shows an interpolated snapshot');
+
+    // Pause: the thumb stays where it was, which is nowhere a report sits.
+    act(() => { play().click(); });
+    assert.equal(play().textContent, 'Play');
+    frames.run(20, 16);
+    assert.equal(thumbLeft(), travelling, 'a pause freezes it mid-glide');
+    assert.match(status(), /Showing PP-1/);
+
+    // Resume from there, arrive, and stop at the last report.
+    act(() => { play().click(); });
+    frames.run(2, 16);
+    assert.ok(thumbLeft() > travelling, 'it carried on from where it froze');
+    frames.until(() => /Showing PP-2/.test(status()), 'the thumb never reached the second report');
+    assert.equal(thumbLeft(), dotLeft('PP-2'));
+    frames.until(() => play().textContent === 'Play', 'playback never ended', { budget: 800 });
+    assert.equal(play().getAttribute('aria-pressed'), 'false');
+  } finally {
+    frames.restore();
+    view.unmount();
+  }
+});
+
+test('the bar plays on the clock, not on the frame rate', () => {
+  // The customer portal, embedded and idle on 2026-09-14, gave the card a frame
+  // every second or so and the thumb sat on its first report for eight seconds:
+  // playback advanced by frame deltas clamped to 100ms, so a 700ms rest cost
+  // seven frames whatever the clock said. Three frames here, spanning eight
+  // seconds — and under the frame-paced version that is 300ms of playback.
+  const frames = fakeFrames();
+  function Bar() {
+    const snap = useProductionTimeline({ ...BASE, poStatus: 'completed' });
+    return <ProductionTimeline snapshot={snap} onPickReport={() => {}} />;
+  }
+  const view = render(<Bar />);
+  const at = (selector: string) => view.container.querySelector<HTMLElement>(selector)!;
+  const play = () => at('.rosh-tl-play');
+  const status = () => at('.rosh-tl-status').textContent ?? '';
+
+  try {
+    act(() => { play().click(); });
+    assert.match(status(), /Showing PP-1/);
+    frames.frame(16);
+    assert.match(status(), /Showing PP-1/, 'the first reading only anchors the rest');
+    frames.frame(4_000);
+    assert.match(status(), /Showing PP-1/, 'the rest is over, and an arrival is a separate event');
+    frames.frame(4_000);
+    assert.match(status(), /Showing PP-2/, 'three frames and eight seconds got it there');
+    assert.equal(play().textContent, 'Play', 'the last report ends the run');
+  } finally {
+    frames.restore();
+    view.unmount();
+  }
+});
+
+test('onScrubProgress lets a consumer table follow the thumb between two reports', () => {
+  // Henry, 2026-09-14: the quantities under the bar have to move with the thumb
+  // rather than waiting for it to land. The card does not draw that table — the
+  // consumer does — so it forwards the track's in-flight fraction, keyed by
+  // report id, and the consumer interpolates its own figures on it.
+  const frames = fakeFrames();
+  const seen: (TimelineScrubProgress | null)[] = [];
+  function Bar() {
+    const snap = useProductionTimeline({ ...BASE, poStatus: 'completed' });
+    return (
+      <ProductionTimeline snapshot={snap} onPickReport={() => {}}
+        onScrubProgress={(state) => { seen.push(state); }} />
+    );
+  }
+  const view = render(<Bar />);
+  const at = (selector: string) => view.container.querySelector<HTMLElement>(selector)!;
+  const play = () => at('.rosh-tl-play');
+  const status = () => at('.rosh-tl-status').textContent ?? '';
+
+  try {
+    act(() => { play().click(); });
+    frames.run(8, 16);
+    // `.length`, not a deepEqual against `[]`: node's assert would narrow `seen`
+    // to `never[]` for the rest of the spec.
+    assert.equal(seen.length, 0, 'the rest is not a journey');
+
+    frames.until(() => seen.length > 0, 'nothing was reported in flight');
+    frames.run(3, 16);
+    const flight = seen.filter((state): state is TimelineScrubProgress => state !== null);
+    assert.ok(flight.length >= 3, `only ${flight.length} frames reported`);
+    for (const state of flight) {
+      // The report IDs, which is what `onPickReport` and the snapshot speak.
+      assert.equal(state.fromKey, 'r1');
+      assert.equal(state.toKey, 'r2');
+      assert.ok(state.t > 0 && state.t < 1, `t=${state.t} is not between the two`);
+      assert.ok(state.ms > day('2026-05-10') && state.ms < day('2026-05-20'), 'the date is between them too');
+    }
+    assert.match(status(), /Showing PP-1/, 'and the status line has not ticked over');
+
+    frames.until(() => /Showing PP-2/.test(status()), 'the thumb never arrived');
+    assert.equal(seen.at(-1), null, 'arriving is the end of the journey');
+  } finally {
+    frames.restore();
+    view.unmount();
+  }
 });
 
 // ── The popover a consumer fills ────────────────────────────────────────────

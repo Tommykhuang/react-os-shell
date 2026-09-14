@@ -20,9 +20,11 @@ import { join, resolve } from 'node:path';
 // the static renders: `fmtSliderDate` reads the user's date format out of
 // localStorage, which does not exist in a bare node process.
 import { act, pressKey, render } from './dom';
+import { fakeFrames, withReducedMotion } from './frames';
+import { useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import TimelineTrack, {
-  type TimelineTrackItem, type TimelineTrackThumb,
+  type TimelineScrubProgress, type TimelineTrackItem, type TimelineTrackThumb,
 } from '../src/shell/TimelineTrack';
 import {
   clusterLabel, clusterMarks, compressTimeAxis, packLabelLanes, TRACK_LABEL_LANE_COUNT,
@@ -480,6 +482,403 @@ test('the label above the thumb opens the document; the dot only selects it', ()
   act(() => { dot.click(); });
   assert.deepEqual(picked, ['r3']);
   view.unmount();
+});
+
+// ── Playback ────────────────────────────────────────────────────────────────
+
+/**
+ * A scrubber played the way the card plays it: the caller owns `playing`, and
+ * moves the value when the track says the thumb has ARRIVED somewhere.
+ *
+ * The thumb's `left` is read as a number rather than compared as a string,
+ * because the whole claim is that it takes values no report sits on.
+ */
+function playback(overrides: Partial<React.ComponentProps<typeof TimelineTrack>> = {}) {
+  const arrived: string[] = [];
+  const activated: string[] = [];
+  /** Every in-flight fraction the track handed out, in order, nulls included. */
+  const progress: (TimelineScrubProgress | null)[] = [];
+  let stops = 0;
+  let control!: { play: () => void; pause: () => void };
+  function Harness() {
+    const [value, setValue] = useState(REPORT_ITEMS[0].ms);
+    const [playing, setPlaying] = useState(false);
+    control = { play: () => act(() => setPlaying(true)), pause: () => act(() => setPlaying(false)) };
+    return (
+      <TimelineTrack
+        startMs={day('2026-05-01')} endMs={day('2026-06-05')}
+        items={REPORT_ITEMS} labels="active" ariaLabel="Production reports"
+        activeKey={REPORT_ITEMS.find((item) => item.ms === value)?.key ?? null}
+        onActivate={(key) => activated.push(key)}
+        thumb={{
+          valueMs: value,
+          stops: REPORT_STOPS,
+          onChange: setValue,
+          valueText: (ms) => `${REPORT_ITEMS.find((i) => i.ms === ms)?.label ?? 'between'} · ${ms}`,
+        }}
+        playback={{
+          playing,
+          onArrive: (key, ms) => { arrived.push(key); setValue(ms); },
+          onProgress: (state) => { progress.push(state); },
+          onStop: () => { stops += 1; setPlaying(false); },
+        }}
+        {...overrides}
+      />
+    );
+  }
+  const view = render(<Harness />);
+  const at = (selector: string) => view.container.querySelector<HTMLElement>(selector)!;
+  return {
+    ...view,
+    arrived,
+    activated,
+    progress,
+    stopped: () => stops,
+    play: () => control.play(),
+    pause: () => control.pause(),
+    thumbLeft: () => parseFloat(at('[data-timeline-part="thumb"]').style.left),
+    chip: () => at('[data-timeline-part="chip"]').textContent ?? '',
+    valueText: () => at('[data-timeline-part="thumb"]').getAttribute('aria-valuetext') ?? '',
+    fillWidth: () => parseFloat(at('[data-timeline-part="fill"]').style.width),
+    dotLeft: (key: string) => parseFloat(at(`[data-timeline-key="${key}"]`).style.left),
+    label: () => at('[data-timeline-part="label"]').textContent ?? '',
+  };
+}
+
+test('Play glides the thumb between two reports rather than jumping it', () => {
+  // Henry, watching the customer portal on 2026-09-14: "the playback should
+  // glide smoothly and continuously, not jump from node to node". The bar
+  // stepped from report to report with a 120ms CSS transition and a timer,
+  // which reads as a thumb that teleports and a chip that changes its mind —
+  // never as travel.
+  const frames = fakeFrames();
+  const view = playback();
+  try {
+    assert.equal(view.thumbLeft(), view.dotLeft('r1'), 'it starts on the first report');
+    view.play();
+
+    // It rests on the report it is leaving before it sets off: the reader has
+    // just been given a snapshot and needs a moment to read it.
+    frames.run(10, 16);
+    assert.equal(view.thumbLeft(), view.dotLeft('r1'), 'the dwell holds it on the report');
+    assert.deepEqual(view.arrived, []);
+
+    frames.until(() => view.thumbLeft() > view.dotLeft('r1'), 'the thumb never set off');
+    // Five consecutive frames, each further along than the last and none of them
+    // on a report — which is the whole difference from the step it replaced.
+    const path: number[] = [];
+    for (let i = 0; i < 5; i++) { frames.frame(16); path.push(view.thumbLeft()); }
+    for (let i = 1; i < path.length; i++) {
+      assert.ok(path[i] > path[i - 1], `frame ${i} did not advance: ${path.join(' → ')}`);
+    }
+    for (const x of path) {
+      assert.ok(x > view.dotLeft('r1') && x < view.dotLeft('r2'), `${x} is not between the two reports`);
+    }
+    // The fill follows the thumb rather than the value behind it.
+    assert.ok(Math.abs(view.fillWidth() - view.thumbLeft()) < 0.01);
+
+    // The chip is a real date between the two reports, read back through the
+    // axis — and the status line's source, the active label, has not moved.
+    assert.notEqual(view.chip(), '');
+    assert.ok(/2026/.test(view.chip()), `the chip stopped saying a date: ${view.chip()}`);
+    assert.match(view.label(), /PP#10140/, 'the label still names the report the thumb left');
+    assert.deepEqual(view.arrived, [], 'nothing has arrived anywhere mid-glide');
+
+    frames.until(() => view.arrived.length > 0, 'the thumb never arrived');
+    assert.deepEqual(view.arrived, ['r2']);
+    assert.equal(view.thumbLeft(), view.dotLeft('r2'), 'and it landed exactly on the report');
+    assert.match(view.valueText(), /PP#10141/, 'the slider now reads the report it is on');
+    assert.match(view.label(), /PP#10141/);
+
+    // On through the bar: every report, once, in order, and then it stops.
+    frames.until(() => view.stopped() > 0, 'playback never ended', { budget: 800 });
+    assert.deepEqual(view.arrived, ['r2', 'r3', 'r4']);
+    assert.equal(view.thumbLeft(), view.dotLeft('r4'));
+    // Arriving is not activating. `onActivate` is what a CLICK means, and both
+    // portals navigate on it — the admin window swaps itself to the report. A
+    // playback that fired it per stop would walk the user through four windows.
+    assert.deepEqual(view.activated, []);
+  } finally {
+    frames.restore();
+    view.unmount();
+  }
+});
+
+test('Pause freezes the thumb mid-glide, and Play carries on from there', () => {
+  const frames = fakeFrames();
+  const view = playback();
+  try {
+    view.play();
+    frames.until(() => view.thumbLeft() > view.dotLeft('r1'), 'the thumb never set off');
+    frames.run(3, 16);
+    const frozen = view.thumbLeft();
+    const chip = view.chip();
+
+    view.pause();
+    assert.equal(frames.armed, 0, 'the loop was cancelled rather than left running');
+    frames.run(20, 16);
+    assert.equal(view.thumbLeft(), frozen, 'a pause is a freeze, not a settle onto a report');
+    assert.equal(view.chip(), chip, 'and the chip freezes with it');
+    assert.deepEqual(view.arrived, []);
+
+    view.play();
+    frames.run(2, 16);
+    assert.ok(view.thumbLeft() > frozen, 'resume carried on from where it froze');
+    assert.ok(view.thumbLeft() < view.dotLeft('r2'), 'on the same segment, not the next one');
+    frames.until(() => view.arrived.length > 0, 'the resumed glide never arrived');
+    assert.deepEqual(view.arrived, ['r2']);
+  } finally {
+    frames.restore();
+    view.unmount();
+  }
+});
+
+test('a drag cancels playback: two hands on one thumb is one too many', () => {
+  const frames = fakeFrames();
+  const view = playback();
+  try {
+    view.play();
+    frames.until(() => view.thumbLeft() > view.dotLeft('r1'), 'the thumb never set off');
+
+    const hit = view.container.querySelector<HTMLElement>('[data-timeline-part="hit"]')!;
+    const pointer = (clientX: number, type: string) => act(() => {
+      hit.dispatchEvent(new window.MouseEvent(type, { clientX, bubbles: true }));
+    });
+    pointer(400, 'pointerdown');
+    pointer(400, 'pointerup');
+
+    assert.equal(view.stopped(), 1, 'the caller was told to put the button back to Play');
+    assert.equal(frames.armed, 0);
+    // The thumb is back under the magnet: on a report, where a released drag
+    // leaves it, and not at the pixel the tween had reached.
+    const resting = view.thumbLeft();
+    assert.ok(
+      REPORT_ITEMS.some((item) => Math.abs(view.dotLeft(item.key) - resting) < 0.01),
+      `the thumb settled at ${resting}, which is no report`,
+    );
+    frames.run(20, 16);
+    assert.equal(view.thumbLeft(), resting, 'and nothing is still driving it');
+    assert.deepEqual(view.arrived, []);
+  } finally {
+    frames.restore();
+    view.unmount();
+  }
+});
+
+test('under reduced motion playback is the step it always was', () => {
+  // Not "no playback": the thumb still walks the reports and the snapshot still
+  // changes. What goes is the travel between them — read at mount, as the rest
+  // of the card's motion is.
+  const stillness = withReducedMotion();
+  const frames = fakeFrames();
+  const view = playback();
+  try {
+    view.play();
+    const seen = new Set<number>();
+    frames.until(() => view.arrived.length > 0, 'the stepped walk never arrived', { budget: 200 });
+    for (let i = 0; i < 40; i++) { seen.add(view.thumbLeft()); frames.frame(16); }
+    const stops = REPORT_ITEMS.map((item) => view.dotLeft(item.key));
+    for (const x of seen) {
+      assert.ok(
+        stops.some((stop) => Math.abs(stop - x) < 0.01),
+        `the thumb was at ${x}, which is between two reports: reduced motion asked for no travel`,
+      );
+    }
+    frames.until(() => view.stopped() > 0, 'the stepped walk never ended', { budget: 800 });
+    assert.deepEqual(view.arrived, ['r2', 'r3', 'r4'], 'every report, once, in order');
+  } finally {
+    frames.restore();
+    stillness();
+    view.unmount();
+  }
+});
+
+test('playback keeps its own time: a rest is 700ms, not seven frames', () => {
+  // The bug this replaces. Playback advanced by frame deltas clamped to 100ms,
+  // so a 700ms rest needed seven frames and a leg needed five — fine at 60fps
+  // and unbounded anywhere else. In the customer portal, embedded and idle, the
+  // thumb sat on its first report for EIGHT SECONDS (2026-09-14, `.rosh-tl-thumb`
+  // style.left sampled every 50ms: 8.8px at 0ms, still 8.8px at 8,031ms).
+  //
+  // Three frames here, spanning eight seconds. Under the frame-paced version
+  // that is 300ms of playback and the thumb has not left the first report.
+  const frames = fakeFrames();
+  const view = playback();
+  try {
+    view.play();
+    frames.frame(16);
+    assert.deepEqual(view.arrived, [], 'the first reading only anchors the rest');
+    assert.equal(view.thumbLeft(), view.dotLeft('r1'));
+
+    frames.frame(4_000);
+    assert.deepEqual(view.arrived, [], 'a rest that is over is not an arrival');
+    assert.equal(
+      view.thumbLeft(), view.dotLeft('r1'),
+      'the glide was spent while nobody was being shown it',
+    );
+
+    frames.frame(4_000);
+    assert.deepEqual(view.arrived, ['r2'], 'one frame past the rest and the leg, and it is there');
+    assert.equal(view.thumbLeft(), view.dotLeft('r2'));
+
+    // And the backlog walks forward at a pace somebody can read: a gap of four
+    // seconds a frame is three legs' worth of time, and each frame still
+    // announces at most one report. Announcing four at once announces none.
+    for (let i = 0; i < 6 && view.stopped() === 0; i++) {
+      const before = view.arrived.length;
+      frames.frame(4_000);
+      assert.ok(view.arrived.length - before <= 1, `frame ${i} announced ${view.arrived.length - before} reports`);
+    }
+    assert.deepEqual(view.arrived, ['r2', 'r3', 'r4']);
+    assert.equal(view.stopped(), 1);
+  } finally {
+    frames.restore();
+    view.unmount();
+  }
+});
+
+test('a pause keeps what is left of the rest rather than spending it', () => {
+  // The rest is measured against the clock, and the clock runs through a pause.
+  // So the pause has to drop the reading the remainder was taken at, or 25
+  // seconds of a paused card resume a 700ms rest as no rest at all — the thumb
+  // would set off the instant the button was pressed.
+  const frames = fakeFrames();
+  const view = playback();
+  try {
+    view.play();
+    frames.frame(16);
+    frames.frame(300);
+    assert.equal(view.thumbLeft(), view.dotLeft('r1'), '400ms of the rest still to run');
+
+    view.pause();
+    assert.equal(frames.armed, 0, 'the loop was cancelled rather than left running');
+    frames.run(5, 5_000);
+
+    view.play();
+    frames.frame(16);
+    frames.frame(300);
+    assert.equal(view.thumbLeft(), view.dotLeft('r1'), 'the paused rest resumed as no rest at all');
+    assert.deepEqual(view.arrived, []);
+    frames.frame(200);
+    frames.frame(600);
+    assert.deepEqual(view.arrived, ['r2'], 'and then it went, on time');
+  } finally {
+    frames.restore();
+    view.unmount();
+  }
+});
+
+test('onProgress hands out the journey, and null at both ends of it', () => {
+  // Henry, 2026-09-14: while the thumb travels between two reports the
+  // quantities in the table below have to travel too, rather than waiting for
+  // the arrival and jumping. The kit does not draw that table, so it hands out
+  // the fraction — the EASED one, the number that places the disc, so the
+  // figures and the disc agree about where they are.
+  const frames = fakeFrames();
+  const view = playback();
+  try {
+    view.play();
+    frames.run(10, 16);
+    // `.length` rather than a deepEqual against `[]`: node's assert narrows its
+    // first argument to the second's type, and `never[]` is not a useful type for
+    // the rest of this spec to read the array as.
+    assert.equal(view.progress.length, 0, 'a thumb at rest is not in flight');
+
+    frames.until(() => view.progress.length > 0, 'nothing was ever reported in flight');
+    frames.run(4, 16);
+    assert.deepEqual(view.arrived, [], 'still crossing');
+    const flight = view.progress.filter((state): state is TimelineScrubProgress => state !== null);
+    assert.ok(flight.length >= 4, `only ${flight.length} frames of a 490ms glide reported`);
+    for (const state of flight) {
+      assert.equal(state.fromKey, 'r1');
+      assert.equal(state.toKey, 'r2');
+      assert.ok(state.t > 0 && state.t < 1, `t=${state.t} is not between two reports`);
+    }
+    for (let i = 1; i < flight.length; i++) {
+      assert.ok(flight[i].t >= flight[i - 1].t, `the fraction went back at ${i}`);
+    }
+    // The same number that draws the disc: t of the way between the two dots IS
+    // where the thumb is.
+    const now = view.progress.at(-1);
+    assert.ok(now, 'the last frame of a glide reported nothing');
+    const x = view.dotLeft('r1') + (view.dotLeft('r2') - view.dotLeft('r1')) * now.t;
+    assert.ok(Math.abs(x - view.thumbLeft()) < 0.01, `t places the thumb at ${x}, it is at ${view.thumbLeft()}`);
+
+    // Arrival ends the journey: the consumer's table goes back to reading the
+    // snapshot it was just handed.
+    frames.until(() => view.arrived.length > 0, 'it never arrived');
+    assert.equal(view.progress.at(-1), null, 'arriving is not a journey');
+
+    // So does a pause, and so does the end of the run.
+    frames.until(() => view.progress.at(-1) !== null, 'the next glide never set off');
+    view.pause();
+    assert.equal(view.progress.at(-1), null, 'a frozen thumb is not in flight');
+    view.play();
+    frames.until(() => view.stopped() > 0, 'playback never ended', { budget: 800 });
+    assert.equal(view.progress.at(-1), null);
+
+    // And nothing is said twice: a consumer interpolating a table on this
+    // re-renders on every call.
+    for (let i = 1; i < view.progress.length; i++) {
+      assert.ok(
+        view.progress[i] !== null || view.progress[i - 1] !== null,
+        `two nulls in a row at ${i}`,
+      );
+    }
+  } finally {
+    frames.restore();
+    view.unmount();
+  }
+});
+
+test('a drag reports where the hand is, and lets go on release', () => {
+  // The other way the thumb sits between two reports. The disc snaps to the
+  // nearest one as the drag goes, so the pointer is the only continuous thing
+  // there is to report — and a consumer's table follows the hand.
+  const view = playback();
+  try {
+    const hit = view.container.querySelector<HTMLElement>('[data-timeline-part="hit"]')!;
+    const pointer = (clientX: number, type: string) => act(() => {
+      hit.dispatchEvent(new window.MouseEvent(type, { clientX, bubbles: true }));
+    });
+    const half = (view.dotLeft('r1') + view.dotLeft('r2')) / 2;
+    pointer(half, 'pointerdown');
+    pointer(half, 'pointermove');
+    const state = view.progress.at(-1);
+    assert.ok(state, 'the drag reported nothing');
+    assert.equal(state.fromKey, 'r1');
+    assert.equal(state.toKey, 'r2');
+    // Linear, not eased: there is no curve in a hand. Halfway along a linear
+    // axis is halfway through the week between the two reports.
+    assert.ok(Math.abs(state.t - 0.5) < 0.02, `halfway across reported t=${state.t}`);
+
+    // On to the next pair, and the neighbours change with it.
+    const later = (view.dotLeft('r2') + view.dotLeft('r3')) / 2;
+    pointer(later, 'pointermove');
+    assert.equal(view.progress.at(-1)?.fromKey, 'r2');
+    assert.equal(view.progress.at(-1)?.toKey, 'r3');
+
+    pointer(later, 'pointerup');
+    assert.equal(view.progress.at(-1), null, 'the release is the end of it');
+  } finally {
+    view.unmount();
+  }
+});
+
+test('under reduced motion there is no journey to report', () => {
+  const stillness = withReducedMotion();
+  const frames = fakeFrames();
+  const view = playback();
+  try {
+    view.play();
+    frames.until(() => view.stopped() > 0, 'the stepped walk never ended', { budget: 800 });
+    assert.deepEqual(view.arrived, ['r2', 'r3', 'r4'], 'the walk stays');
+    assert.equal(view.progress.length, 0, 'and the travel it would have reported goes');
+  } finally {
+    frames.restore();
+    stillness();
+    view.unmount();
+  }
 });
 
 test('without a handler the label is text, because a dead link is worse than none', () => {
