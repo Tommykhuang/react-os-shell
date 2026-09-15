@@ -92,6 +92,20 @@ export interface TimelineTrackItem {
    * like a link and does nothing is worse than one that does not.
    */
   onOpen?: () => void;
+  /**
+   * The few characters drawn ABOVE the mark on a bare rail (`labels="none"`) —
+   * `v3` for a drawing revision. The label itself is in the popover; this is
+   * what tells revisions apart at a glance without a label lane to say so.
+   * Captions that would overprint each other collapse to `first–last`.
+   */
+  caption?: string;
+  /**
+   * The mark stands for something that has NOT happened yet, placed on the
+   * best date the record holds — a sample ORDERED on a day, drawn where a
+   * shipment will be. Hollow, and left out of the fill: the fill is what was
+   * reached, and a provisional mark is a promise rather than a fact.
+   */
+  provisional?: boolean;
 }
 
 /** Visual classification for a `TimelineMarker`. */
@@ -237,8 +251,13 @@ export interface TimelineTrackProps {
    * shares the rest of the track proportionally among what is left;
    * `'linear'` (the default) keeps time proportional throughout. A bar whose
    * events arrive weekly wants linear — a week is not an idle stretch to hide.
+   * `'spread'` cuts nothing: every stretch between two dated marks is held to
+   * at least 48 px and the idle stretches pay for it in proportion, so a
+   * fortnight of revisions is readable and a ten-month wait is still drawn as
+   * the longest thing on the bar — just not as 84% of it. No break glyph,
+   * because no piece of the bar has stopped keeping time.
    */
-  axis?: 'linear' | 'compressed';
+  axis?: 'linear' | 'compressed' | 'spread';
   /** The dated marks, in any order. */
   items: TimelineTrackItem[];
   /** Context events, drawn on the rail beside the items. */
@@ -254,8 +273,28 @@ export interface TimelineTrackProps {
    * `'lanes'` packs every label into two rows and folds same-kind runs into
    * `×N` pills; `'active'` draws ONE label — the active or hovered mark — which
    * is what a scrubber wants, because the thumb already says where you are.
+   * `'none'` draws no label at all: the bare rail, where every mark is a dot
+   * with a popover, a mark's `caption` is the only text near it, the edge
+   * captions flank the rail on its own row rather than sitting inside the
+   * stage, and the undated things are one dashed cap at the end of a dashed
+   * tail instead of a column beside the bar.
    */
-  labels?: 'lanes' | 'active';
+  labels?: 'lanes' | 'active' | 'none';
+  /**
+   * The marks to light up, by key. The rail draws one soft band from the
+   * leftmost named mark to the rightmost and lights every mark inside it — a
+   * single key is a ring around one dot. For a consumer whose stepper above
+   * the bar wants to say "this step is THESE dates" on hover. `null` lights
+   * nothing. A key the bar has no mark for is ignored, except the cap: a bare
+   * rail's dashed cap carries the last pending item's key.
+   */
+  highlightKeys?: string[] | null;
+  /**
+   * The mark under the pointer or the focus, by key, and `null` when there is
+   * none — the other direction of `highlightKeys`, so a consumer can light the
+   * step a mark belongs to. A fold reports its first member.
+   */
+  onHoverChange?: (key: string | null) => void;
   /** The mark the caller considers selected. Gets the hot treatment and, in
    *  `'active'` mode, the one label that is drawn. */
   activeKey?: string | null;
@@ -333,10 +372,23 @@ interface TrackGeometry {
   height: number;
 }
 
-const GEOMETRY: Record<'lanes' | 'active', TrackGeometry> = {
+const GEOMETRY: Record<'lanes' | 'active' | 'none', TrackGeometry> = {
   lanes: { tag: 0, laneA: 17, laneH: 30, rail: 52, ruler: 64, laneB: 86, height: 120 },
   active: { tag: 0, laneA: 17, laneH: 30, rail: 38, ruler: 50, laneB: 74, height: 108 },
+  // The bare rail has one band above the rail — the captions — and the ruler
+  // under it. `laneB` is the ruler's own row: nothing is drawn there.
+  none: { tag: 0, laneA: 16, laneH: 14, rail: 34, ruler: 46, laneB: 46, height: 72 },
 };
+
+/** The dashed tail a bare rail draws past its axis to the cap that stands for
+ *  what has not happened yet. Fixed, like a cut: it is not a stretch of time. */
+const CAP_TAIL_PX = 36;
+
+/** Clear space between two captions before they are read as one run. */
+const CAPTION_GAP_PX = 6;
+
+/** How far a highlight band reaches past the marks it lights. */
+const BAND_REACH_PX = 10;
 
 /** Room under the ruler for a phase bracket and its caption. */
 const PHASE_BAND_PX = 22;
@@ -523,16 +575,23 @@ function resolveGlyph(
  * The kind tokens and the accent are the same value now (see the `--tl-*` block
  * in `ui.css`), so this is one colour reached one way.
  */
-function nodeDressing(kind: TimelineTrackKind, role: NodeRole): { className: string; style: CSSProperties } {
+function nodeDressing(
+  kind: TimelineTrackKind,
+  role: NodeRole,
+  provisional = false,
+): { className: string; style: CSSProperties } {
   const style = KIND_STYLES[kind];
   const classes = ['rosh-tl-node', 'rosh-tl-mark', `is-${role}`];
   if (style.diamond) classes.push('is-diamond');
+  if (provisional) classes.push('is-provisional');
   // The current mark is the accent's, whatever its kind: it is not "a
   // shipment", it is where you are. A kind that names no token is the accent
   // too, which is what makes the glyph the only thing telling the kinds apart.
   const colour = role === 'current' ? 'var(--tl-accent)' : style.token ?? 'var(--tl-accent)';
-  const css: CSSProperties = role === 'dot'
-    ? { borderColor: colour }
+  // A provisional mark is the kind's shape and glyph drawn HOLLOW: the outline
+  // says what it will be, the empty middle says it is not that yet.
+  const css: CSSProperties = role === 'dot' || provisional
+    ? { borderColor: colour, color: colour }
     : { backgroundColor: colour, color: 'var(--tl-on-kind)' };
   return { className: classes.join(' '), style: css };
 }
@@ -568,6 +627,14 @@ interface Mark {
   onOpen?: () => void;
   /** False for a context marker — on the rail, but not part of the programme. */
   isItem: boolean;
+  /** The short text a bare rail draws above the mark. */
+  caption?: string;
+  /** Hollow, and outside the fill: placed on the best date the record holds
+   *  for something that has not happened. */
+  provisional: boolean;
+  /** The bare rail's cap: the one node past the axis that stands for every
+   *  undated thing. Never moved by a zoom, never part of the fill. */
+  isCap: boolean;
 }
 
 /**
@@ -844,19 +911,22 @@ function Ruler({ startMs, endMs, axis, geo, reveal }: {
   const labels: ReactNode[] = [];
   const cuts = axis.gaps.filter((gap) => gap.compressed);
 
-  const weekStep = axis.xByMs(startMs + 7 * DAY_MS) - axis.xByMs(startMs);
-  if (weekStep >= WEEK_TICK_MIN_PX) {
-    const monday = new Date(startMs);
-    // The next Monday, so the weeks line up with a calendar rather than with the
-    // day the programme happened to start.
-    monday.setUTCDate(monday.getUTCDate() + ((8 - monday.getUTCDay()) % 7));
-    for (let t = monday.getTime(); t < endMs; t += 7 * DAY_MS) {
-      if (axis.inCut(t)) continue;
-      ticks.push(
-        <i key={`wk-${t}`} className="rosh-tl-tick is-week"
-          style={{ left: `${axis.xByMs(t)}px`, top: `${y}px`, height: '3px' }} />,
-      );
-    }
+  // A week tick where THAT week clears the minimum — asked per tick, because
+  // on a piecewise axis a week is 14 px in the fortnight of revisions and 2 px
+  // in the ten idle months after them, and one answer for the whole bar drew
+  // a dense comb across the stretch it was least true of.
+  const monday = new Date(startMs);
+  // The next Monday, so the weeks line up with a calendar rather than with the
+  // day the programme happened to start.
+  monday.setUTCDate(monday.getUTCDate() + ((8 - monday.getUTCDay()) % 7));
+  for (let t = monday.getTime(); t < endMs; t += 7 * DAY_MS) {
+    if (axis.inCut(t)) continue;
+    const x = axis.xByMs(t);
+    if (axis.xByMs(t + 7 * DAY_MS) - x < WEEK_TICK_MIN_PX) continue;
+    ticks.push(
+      <i key={`wk-${t}`} className="rosh-tl-tick is-week"
+        style={{ left: `${x}px`, top: `${y}px`, height: '3px' }} />,
+    );
   }
 
   // A cut's span label carries information no other mark repeats, so it owns its
@@ -1033,6 +1103,8 @@ function TrackRail({ axis, geo, fillTo, reveal, trackPx, tweened = false }: {
   geo: TrackGeometry;
   fillTo: number | null;
   reveal: boolean;
+  /** How far the rail runs: the axis's width, which on a bare rail with a cap
+   *  is short of the layer — the dashed tail is drawn by the caller. */
   trackPx: number;
   /** True where a thumb drives the fill, which is the only case in which its
    *  width should ease: a resize moving it is a relayout, not a move. */
@@ -1040,7 +1112,8 @@ function TrackRail({ axis, geo, fillTo, reveal, trackPx, tweened = false }: {
 }) {
   return (
     <div aria-hidden="true">
-      <div className="rosh-tl-rail bg-gray-200" style={{ top: `${geo.rail}px`, height: `${RAIL_PX}px` }} />
+      <div className="rosh-tl-rail bg-gray-200"
+        style={{ top: `${geo.rail}px`, height: `${RAIL_PX}px`, width: `${trackPx}px` }} />
       {fillTo !== null && (
         <div data-timeline-part="fill"
           className={`rosh-tl-fill bg-blue-600${tweened ? ' is-tweened' : ''}${reveal ? ' rosh-tl-draw' : ''}`}
@@ -1136,6 +1209,59 @@ function TodayMark({ x, geo, trackPx, label, reveal }: {
         }}>
         Today
       </span>
+    </div>
+  );
+}
+
+/**
+ * The bare rail's captions: a few characters over each mark that has any,
+ * `v3` over a drawing revision. Nothing else on that rail is text, so this is
+ * what tells six revisions apart before the pointer arrives.
+ *
+ * Captions that would overprint each other are drawn as ONE — `v1–v4` over the
+ * run — measured on the same 10 px mono face the ruler uses. A fold's caption
+ * spans its members the same way, because a fold is a run already.
+ */
+function Captions({ nodes, geo, reveal }: { nodes: RailNode[]; geo: TrackGeometry; reveal: boolean }) {
+  const captioned = nodes
+    .map((node) => {
+      const texts = node.members.map((member) => member.caption).filter((c): c is string => !!c);
+      if (texts.length === 0) return null;
+      return { x: node.x, first: texts[0], last: texts[texts.length - 1] };
+    })
+    .filter((entry): entry is { x: number; first: string; last: string } => entry !== null)
+    .sort((a, b) => a.x - b.x);
+  const runs: { x: number; text: string }[] = [];
+  let run: { from: number; to: number; first: string; last: string; right: number } | null = null;
+  const flush = () => {
+    if (!run) return;
+    runs.push({
+      x: (run.from + run.to) / 2,
+      text: run.first === run.last ? run.first : `${run.first}–${run.last}`,
+    });
+    run = null;
+  };
+  for (const entry of captioned) {
+    const text = entry.first === entry.last ? entry.first : `${entry.first}–${entry.last}`;
+    const half = monoWidth(text) / 2;
+    if (run && entry.x - half < run.right + CAPTION_GAP_PX) {
+      run.to = entry.x;
+      run.last = entry.last;
+      run.right = entry.x + half;
+      continue;
+    }
+    flush();
+    run = { from: entry.x, to: entry.x, first: entry.first, last: entry.last, right: entry.x + half };
+  }
+  flush();
+  return (
+    <div aria-hidden="true" data-timeline-part="captions">
+      {runs.map((entry) => (
+        <span key={`${entry.x}-${entry.text}`} className={`rosh-tl-caption${reveal ? ' rosh-tl-fade' : ''}`}
+          style={{ left: `${entry.x}px`, top: `${geo.laneA}px`, ...(reveal ? { animationDelay: '360ms' } : {}) }}>
+          {entry.text}
+        </span>
+      ))}
     </div>
   );
 }
@@ -1639,6 +1765,17 @@ function stageHeight(geo: TrackGeometry, usesFarLane: boolean, hasPhases: boolea
 }
 
 /**
+ * Which axis options a mode stands for. `'linear'` lifts both the ceiling and
+ * the floor; `'spread'` lifts the ceiling alone, so nothing is cut and the
+ * floor is paid for out of the idle stretches; `'compressed'` keeps both.
+ */
+function axisOptions(mode: 'linear' | 'compressed' | 'spread') {
+  if (mode === 'compressed') return {};
+  if (mode === 'spread') return { maxTimeShare: Infinity };
+  return { maxTimeShare: Infinity, minGapPx: 0 };
+}
+
+/**
  * The time axis both timelines are drawn on.
  *
  * One primitive behind the mould milestone card (`MilestoneTimeline`) and the
@@ -1671,7 +1808,12 @@ export default function TimelineTrack({
   startMs, endMs, axis: axisMode = 'linear', items, markers = [], pending = [],
   fillToMs, todayMs, labels = 'lanes', activeKey = null, onActivate, thumb, playback,
   edgeCaptions, phases = [], currentKey, zoomRange = null, motion = true, ariaLabel,
+  highlightKeys = null, onHoverChange,
 }: TimelineTrackProps) {
+  // The bare rail: no label lanes, captions flanking the rail, undated things
+  // as one cap past the axis. Decided once, because it changes the geometry,
+  // the width the axis gets, and what the stage draws.
+  const bare = labels === 'none';
   // Captured once at mount so render stays idempotent — day-resolution marks do
   // not care that "today" does not tick while the view is open.
   const [mountedToday] = useState(() => Date.now());
@@ -1701,12 +1843,17 @@ export default function TimelineTrack({
   // a track, is what every coordinate is computed against.
   const rootWidth = useObservedWidth(rootRef, true);
   const bodyColumn = rootWidth > 0
-    ? rootWidth - (pending.length > 0 ? PENDING_COLUMN_PX + BODY_GAP_PX : 0)
+    ? rootWidth - (pending.length > 0 && !bare ? PENDING_COLUMN_PX + BODY_GAP_PX : 0)
     : 0;
   const vertical = bodyColumn > 0 && bodyColumn - 2 * EDGE_INSET_PX < VERTICAL_BELOW_PX;
   const layerWidth = useObservedWidth(layerRef, !vertical);
   const trackPx = layerWidth > 0 ? layerWidth : FALLBACK_TRACK_PX;
-  const geo = GEOMETRY[labels === 'active' ? 'active' : 'lanes'];
+  const geo = GEOMETRY[labels];
+  // On a bare rail with something still to come, the axis stops short of the
+  // layer's right edge: the last stretch is the dashed tail to the cap, and it
+  // keeps no time.
+  const hasCap = bare && pending.length > 0;
+  const axisPx = hasCap ? Math.max(0, trackPx - CAP_TAIL_PX) : trackPx;
 
   // The axis. Anchored on both ends of the window and on every dated item inside
   // it, so the stretches that get clamped are exactly the stretches between
@@ -1719,12 +1866,15 @@ export default function TimelineTrack({
     .sort((a, b) => a.ms - b.ms);
   const axis = compressTimeAxis(
     [startMs, ...dated.filter((m) => m.ms > startMs && m.ms < endMs).map((m) => m.ms), endMs],
-    trackPx,
-    axisMode === 'compressed' ? {} : { maxTimeShare: Infinity, minGapPx: 0 },
+    axisPx,
+    axisOptions(axisMode),
   );
   const xOf = axis.xByMs;
 
-  const resolvedCurrent = currentKey ?? (dated.length > 0 ? dated[dated.length - 1].key : null);
+  // "Where we are" is the last thing that HAPPENED. A provisional mark is a
+  // promise placed on a date, and a pulse on a promise says it was kept.
+  const happened = dated.filter((item) => !item.provisional);
+  const resolvedCurrent = currentKey ?? (happened.length > 0 ? happened[happened.length - 1].key : null);
 
   const itemMarks: Mark[] = dated.map((item, index) => {
     const dateText = item.date ?? fmtSliderDate(item.ms);
@@ -1742,11 +1892,18 @@ export default function TimelineTrack({
       preview: item.preview,
       glyph: resolveGlyph(item, kind, index === 0 && kind === 'default'),
       role: item.key === resolvedCurrent ? 'current' : ordinary ? 'dot' : 'key',
-      widthPx: measured[item.key] || estimateLabelWidth(item.label, dateText),
+      // A bare rail draws no label, so the only width a mark has to defend when
+      // a fold opens around it is its caption's.
+      widthPx: bare
+        ? Math.max(MARK_OVERLAP_PX, monoWidth(item.caption ?? '') + CAPTION_GAP_PX)
+        : measured[item.key] || estimateLabelWidth(item.label, dateText),
       collapsible: ordinary,
       onClick: item.onClick,
       onOpen: item.onOpen,
       isItem: true,
+      caption: item.caption,
+      provisional: !!item.provisional,
+      isCap: false,
     };
   });
   const markerMarks: Mark[] = markers
@@ -1774,9 +1931,43 @@ export default function TimelineTrack({
         onClick: marker.onClick ? () => marker.onClick?.(marker) : undefined,
         onOpen: marker.onOpen ? () => marker.onOpen?.(marker) : undefined,
         isItem: false,
+        provisional: false,
+        isCap: false,
       };
     });
-  const marks = [...itemMarks, ...markerMarks].sort((a, b) => a.x - b.x || a.ms - b.ms);
+  /**
+   * The cap: one node past the axis standing for everything undated, on a
+   * bare rail. It is the LAST pending thing by name — the programme's end,
+   * which is what the caller listed last — and its popover names the rest, so
+   * nothing folded into it is reachable by nobody. It keeps the pending item's
+   * own key, so a consumer's `highlightKeys` can light it the way it lights a
+   * dated mark.
+   */
+  const capMarks: Mark[] = hasCap
+    ? (() => {
+      const cap = pending[pending.length - 1];
+      const others = pending.slice(0, -1).map((entry) => entry.label);
+      return [{
+        key: cap.key,
+        // Past the window, so it sorts last; never handed to the axis.
+        ms: endMs + DAY_MS,
+        x: trackPx,
+        baseX: trackPx,
+        kind: cap.kind ?? 'default',
+        label: cap.label,
+        dateText: 'Not yet reached',
+        detail: others.length > 0 ? `Also to come: ${others.join(', ')}` : undefined,
+        glyph: undefined,
+        role: 'key' as NodeRole,
+        widthPx: MARK_OVERLAP_PX,
+        collapsible: false,
+        isItem: false,
+        provisional: false,
+        isCap: true,
+      }];
+    })()
+    : [];
+  const marks = [...itemMarks, ...markerMarks, ...capMarks].sort((a, b) => a.x - b.x || a.ms - b.ms);
 
   // The start anchor. The caption defaults to the window's own left edge, in the
   // reader's date format, because that is the fact the bar was failing to state.
@@ -1824,13 +2015,13 @@ export default function TimelineTrack({
     : zoomRange
       ? marks.filter((mark) => mark.ms >= zoomRange[0] && mark.ms <= zoomRange[1]).map(focusOf)
       : [];
-  const view = zoomFocus.length > 1 ? magnifyAxis(axis, zoomFocus, trackPx) : axis;
+  const view = zoomFocus.length > 1 ? magnifyAxis(axis, zoomFocus, axisPx) : axis;
   const zoomed = view !== axis;
   if (zoomed) {
     // The marks are rebuilt on every render, so moving them is local: the
     // alternative is a second pass that builds every mark twice to change one
-    // number on each of them.
-    for (const mark of marks) mark.x = view.xByMs(mark.ms);
+    // number on each of them. The cap is not on the axis, so it does not move.
+    for (const mark of marks) if (!mark.isCap) mark.x = view.xByMs(mark.ms);
   }
   // A mark on (or within a hair of) the start day, read off the coordinates
   // actually drawn rather than the ones before a magnification. The mould card
@@ -2129,11 +2320,24 @@ export default function TimelineTrack({
     };
   }, [playing, endPlayback, reportProgress]);
 
+  // The fill is what was REACHED, so a provisional mark — placed on a promise
+  // rather than a fact — is not the end of it.
+  const reached = itemMarks.filter((mark) => !mark.provisional);
   const fillTo = thumb
     ? (glide ? glide.ms : thumbAt)
     : fillToMs !== undefined
       ? fillToMs
-      : itemMarks.length > 0 ? Math.min(itemMarks[itemMarks.length - 1].ms, now) : null;
+      : reached.length > 0 ? Math.min(reached[reached.length - 1].ms, now) : null;
+
+  // What the consumer asked to light: one band from the leftmost named mark to
+  // the rightmost, and every node standing inside it. A key with no mark on
+  // this rail lights nothing, rather than a band to nowhere.
+  const litKeys = new Set(highlightKeys ?? []);
+  const litXs = marks.filter((mark) => litKeys.has(mark.key)).map((mark) => mark.x);
+  const band = litXs.length > 0
+    ? { from: Math.min(...litXs), to: Math.max(...litXs) }
+    : null;
+  const isLit = (node: RailNode) => !!band && node.x >= band.from - 0.5 && node.x <= band.to + 0.5;
 
   const closeOverlays = useCallback(() => {
     clearTimeout(graceRef.current);
@@ -2266,10 +2470,16 @@ export default function TimelineTrack({
     else closeFold();
   };
 
+  /** The key a consumer hears for a node: a mark's own, a fold's first member. */
+  const reportedKey = (key: string) => {
+    const node = railNodes.find((candidate) => candidate.key === key);
+    return node?.members[0]?.key ?? key;
+  };
   const showBubble = (key: string) => {
     clearTimeout(graceRef.current);
     setHoveredKey(key);
     setBubbleKey(key);
+    onHoverChange?.(reportedKey(key));
   };
   const hideBubble = (key: string) => {
     setHoveredKey((prev) => (prev === key ? null : prev));
@@ -2278,11 +2488,15 @@ export default function TimelineTrack({
       () => setBubbleKey((prev) => (prev === key ? null : prev)),
       BUBBLE_GRACE_MS,
     );
+    // At once, not after the bubble's grace: the consumer is lighting a step
+    // to match the pointer, and a step that stays lit for 160 ms after the
+    // pointer has gone reads as a stuck highlight, not a courtesy.
+    onHoverChange?.(null);
   };
 
   const nodeProps = (mark: Mark): NodeButtonProps => ({
     type: 'button',
-    'data-timeline-node': mark.isItem ? 'item' : 'marker',
+    'data-timeline-node': mark.isCap ? 'cap' : mark.isItem ? 'item' : 'marker',
     'data-timeline-key': mark.key,
     'aria-label': accessibleName(mark),
     'aria-describedby': bubbleKey === mark.key ? tipId : undefined,
@@ -2347,24 +2561,39 @@ export default function TimelineTrack({
     },
   });
 
-  const usesFarLane = labels === 'active' || marks.length > 1;
+  const usesFarLane = labels !== 'lanes' || marks.length > 1;
   // One root in both variants, because it is what the variant is decided from.
   if (vertical) {
     return (
       <div ref={rootRef}>
         <VerticalTrack
-          marks={marks} pending={pending} currentKey={resolvedCurrent} todayMs={now}
-          reveal={reveal} ariaLabel={ariaLabel} step={step}
+          // The cap is a horizontal device: past the axis, at the end of a
+          // tail. The vertical list has the pending column for the same facts.
+          marks={marks.filter((mark) => !mark.isCap)} pending={pending} currentKey={resolvedCurrent}
+          todayMs={now} reveal={reveal} ariaLabel={ariaLabel} step={step}
           nodeProps={nodeProps} onKeyDown={onListKeyDown}
         />
       </div>
     );
   }
 
+  /** A flank caption: the bare rail's "Start" / "Ready", on the rail's own row.
+   *  Hung off the rail's centre line, like the start caption is off the rail. */
+  const flank = (caption: ReactNode, end: boolean) => (
+    caption == null || caption === false ? null : (
+      <span aria-hidden="true" className={`rosh-tl-flank${end ? ' is-end' : ''}`}
+        data-timeline-part={end ? 'end-caption' : 'start-caption'}
+        style={{ paddingTop: `${geo.rail - 3}px` }}>
+        {caption}
+      </span>
+    )
+  );
+
   return (
-    <div ref={rootRef} className={`rosh-tl-body${pending.length > 0 ? '' : ' is-solo'}`}>
+    <div ref={rootRef} className={`rosh-tl-body${pending.length > 0 && !bare ? '' : ' is-solo'}`}>
       <div className="flex items-stretch gap-3">
-        <div className="rosh-tl-stage" style={{ height: `${stageHeight(geo, usesFarLane, phases.length > 0)}px` }}>
+        {bare && flank(startCaption, false)}
+        <div className="rosh-tl-stage" style={{ height: `${stageHeight(geo, usesFarLane, phases.length > 0 && !bare)}px` }}>
           {/* `is-gliding` takes the thumb's 120 ms transitions away for as long
               as an animation frame is placing it: a transition chasing a tween
               lags behind it, and a pause would then keep sliding for another
@@ -2387,12 +2616,28 @@ export default function TimelineTrack({
               else releaseFold();
             }}
             onMouseLeave={releaseFold}>
-            <MeasuringRow marks={marks} innerRef={measureRef} />
-            <TrackRail axis={view} geo={geo} fillTo={fillTo} reveal={reveal} trackPx={trackPx}
+            {!bare && <MeasuringRow marks={marks} innerRef={measureRef} />}
+            <TrackRail axis={view} geo={geo} fillTo={fillTo} reveal={reveal} trackPx={axisPx}
               tweened={!!thumb} />
+            {hasCap && (
+              /* The tail: from where the axis ends to the cap. Dashed, because
+                 it is not time — it is the distance to a date nobody has. */
+              <i aria-hidden="true" className="rosh-tl-tail" data-timeline-part="tail"
+                style={{ left: `${axisPx}px`, width: `${trackPx - axisPx}px`, top: `${geo.rail + RAIL_PX / 2 - 1}px` }} />
+            )}
+            {band && (
+              <div aria-hidden="true" className="rosh-tl-band" data-timeline-part="highlight"
+                style={{
+                  left: `${band.from - BAND_REACH_PX}px`,
+                  width: `${band.to - band.from + 2 * BAND_REACH_PX}px`,
+                  top: `${geo.rail - 7}px`,
+                  height: `${RAIL_PX + 14}px`,
+                }} />
+            )}
             <Ruler startMs={startMs} endMs={endMs} axis={view} geo={geo} reveal={reveal} />
-            <StartMark geo={geo} caption={startCaption} endCaption={edgeCaptions?.end}
+            <StartMark geo={geo} caption={bare ? null : startCaption} endCaption={bare ? null : edgeCaptions?.end}
               around={startCrowded} reveal={reveal} trackPx={trackPx} />
+            {bare && <Captions nodes={railNodes} geo={geo} reveal={reveal} />}
             {/* Today is drawn even where the axis was cut, unlike a ruler tick:
                 a tick inside a cut labels a coordinate with no date, but "you
                 are here" is the one landmark a reader needs most in exactly the
@@ -2408,7 +2653,7 @@ export default function TimelineTrack({
               <TodayMark x={view.xByMs(Math.min(now, endMs))} geo={geo} trackPx={trackPx}
                 label={fmtSliderDate(now)} reveal={reveal} />
             )}
-            {phases.map((phase) => (
+            {!bare && phases.map((phase) => (
               <PhaseBracket key={phase.key} phase={phase} geo={geo} xOf={view.xByMs} />
             ))}
             <ol className="rosh-tl-nodes" aria-label={ariaLabel} onKeyDown={onListKeyDown}>
@@ -2417,6 +2662,20 @@ export default function TimelineTrack({
                   key !== null && node.members.some((member) => member.key === key);
                 const top = `${geo.rail + RAIL_PX / 2}px`;
                 const entrance = reveal ? stagger(index, step) : {};
+                const lit = isLit(node) ? ' is-lit' : '';
+                if (node.mark?.isCap) {
+                  // The cap: hollow and dashed, like the start anchor and for
+                  // the same reason — nothing was filed on the day it stands on,
+                  // because there is no such day yet. A real button all the
+                  // same: its popover is where the undated things are named.
+                  return (
+                    <li key={node.key}>
+                      <button {...nodeProps(node.mark)}
+                        className={`rosh-tl-node rosh-tl-mark is-cap${lit}${reveal ? ' rosh-tl-pop' : ''}`}
+                        style={{ left: `${node.x}px`, top, ...entrance }} />
+                    </li>
+                  );
+                }
                 if (!node.mark) {
                   // A fold. Same kind throughout: that kind's shape and glyph,
                   // with the count beside it. Mixed: a neutral `×N` pill, because
@@ -2427,7 +2686,7 @@ export default function TimelineTrack({
                   return (
                     <li key={node.key} {...(holds(resolvedCurrent) ? { 'aria-current': 'step' as const } : {})}>
                       <button {...foldProps(node)}
-                        className={`${dressing.className} is-fold${mixed ? ' is-mixed' : ''}${holds(activeKey) ? ' is-active' : ''}${reveal ? ' rosh-tl-pop' : ''}`}
+                        className={`${dressing.className} is-fold${mixed ? ' is-mixed' : ''}${holds(activeKey) ? ' is-active' : ''}${lit}${reveal ? ' rosh-tl-pop' : ''}`}
                         style={{ ...dressing.style, left: `${node.x}px`, top, ...entrance }}>
                         {glyph && <TimelineGlyph name={glyph} />}
                         {mixed && <span aria-hidden="true" className="rosh-tl-foldnum">×{node.members.length}</span>}
@@ -2442,12 +2701,12 @@ export default function TimelineTrack({
                   );
                 }
                 const mark = node.mark;
-                const dressing = nodeDressing(mark.kind, mark.role);
+                const dressing = nodeDressing(mark.kind, mark.role, mark.provisional);
                 const { glyph } = mark;
                 return (
                   <li key={mark.key} {...(mark.key === resolvedCurrent ? { 'aria-current': 'step' as const } : {})}>
                     <button {...nodeProps(mark)}
-                      className={`${dressing.className}${mark.key === activeKey ? ' is-active' : ''}${reveal ? ' rosh-tl-pop' : ''}`}
+                      className={`${dressing.className}${mark.key === activeKey ? ' is-active' : ''}${lit}${reveal ? ' rosh-tl-pop' : ''}`}
                       style={{
                         ...dressing.style,
                         left: `${mark.x}px`,
@@ -2473,12 +2732,12 @@ export default function TimelineTrack({
                 previewCluster={previewCluster} setPreviewCluster={setPreviewCluster}
                 setZoomKey={setZoomKey}
               />
-            ) : (
+            ) : labels === 'active' ? (
               <ActiveLabel
                 nodes={railNodes} trackPx={trackPx} geo={geo}
                 activeKey={activeKey} hoveredKey={hoveredKey} currentKey={resolvedCurrent}
               />
-            )}
+            ) : null}
             {/* One bubble, two depths. Without a `preview` it is the label, the
                 date and whatever `detail` said — enough to know which dot this
                 is. With one it is the document in miniature, supplied by the
@@ -2549,8 +2808,9 @@ export default function TimelineTrack({
             )}
           </div>
         </div>
+        {bare && flank(edgeCaptions?.end, true)}
       </div>
-      {pending.length > 0 && <PendingColumn pending={pending} reveal={reveal} />}
+      {pending.length > 0 && !bare && <PendingColumn pending={pending} reveal={reveal} />}
     </div>
   );
 }

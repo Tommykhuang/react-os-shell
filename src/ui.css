@@ -717,6 +717,48 @@ html.rosh-reduce-transparency *::after {
   width: 10px; height: 10px; background: var(--surface);
   border: 1.5px dashed var(--line-strong); box-shadow: none; cursor: default;
 }
+/* A provisional mark: the kind's shape and glyph drawn hollow, on the best date
+   the record holds for something that has not happened — a sample ORDERED,
+   where a shipment will be. The outline says what it will be; the empty middle
+   says it is not that yet. The inline style sets the border colour. */
+.rosh-tl-node.is-provisional {
+  background: var(--surface); border-width: 2px; border-style: solid;
+}
+/* Lit by the consumer — a stepper step hovered above the bar names the marks
+   it covers. The same soft wash the current mark wears, at the same radius, so
+   "these" and "here" are one vocabulary. */
+.rosh-tl-node.is-lit { box-shadow: 0 0 0 2px var(--surface-sunken), 0 0 0 5px var(--tl-soft); }
+/* The band under the marks a consumer lit: one soft stretch of the accent, the
+   rail's own height with room around it, rounded at both ends. */
+.rosh-tl-band { position: absolute; border-radius: 999px; background: var(--tl-soft); pointer-events: none; }
+
+/* ── The bare rail (`labels="none"`) ──────────────────────────────────────
+   No label lanes. The edge captions flank the rail on its own row, the only
+   text over the rail is a mark's caption, and the undated things are a dashed
+   cap at the end of a dashed tail. */
+.rosh-tl-flank {
+  flex: none; white-space: nowrap; font-size: 11px; font-weight: 500; line-height: 1;
+  color: var(--ink-muted);
+}
+/* The caption over a mark — `v3` over a revision. Mono, like every other
+   small text the rail draws, and never a pointer target: the mark under it is. */
+.rosh-tl-caption {
+  position: absolute; transform: translateX(-50%); white-space: nowrap; pointer-events: none;
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  font-size: 10px; line-height: 1.1; color: var(--ink-muted);
+}
+/* The tail: from the end of the axis to the cap. Dashed, because it is not
+   time — it is the distance to a date nobody has. */
+.rosh-tl-tail { position: absolute; height: 0; border-top: 2px dashed var(--line-strong); }
+/* The cap: the start anchor's own drawing, at the other end and for the same
+   reason, but a real button — its popover is where the undated things are
+   named. `.is-lit` still reaches it, so a consumer can light "the end". */
+.rosh-tl-node.is-cap {
+  width: 14px; height: 14px; box-sizing: border-box; cursor: default;
+  background: var(--surface); border: 2px dashed var(--line-strong);
+  box-shadow: 0 0 0 2px var(--surface-sunken);
+}
+
 /* The start anchor. Hollow and dashed, because it is not an event — nothing was
    filed on the day the axis opens, and a solid disc there would claim there
    was. Decoration only: it takes no pointer, so the scrubber's hit strip runs
