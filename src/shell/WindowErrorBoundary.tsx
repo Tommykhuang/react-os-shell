@@ -1,21 +1,34 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { isStaleChunkError } from './staleChunk';
 
 /** Inline crash state rendered in place of a window's content. Centers itself
  *  in whatever space the body gives it; `onReload` resets the owning boundary
- *  so the content remounts from scratch. */
+ *  so the content remounts from scratch.
+ *
+ *  One crash a remount can never fix: a lazy chunk the server no longer has,
+ *  because a deploy replaced the build under this tab (see `staleChunk.ts`).
+ *  Remounting re-imports the same missing file. For that error the button is
+ *  "Reload page" and reloads the document, which is the only recovery. */
 export function WindowCrashedFallback({ error, onReload }: { error: Error; onReload: () => void }) {
+  const stale = isStaleChunkError(error);
   return (
     <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 py-12 text-center">
       <svg className="h-8 w-8 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
       </svg>
       <div className="min-w-0">
-        <p className="text-sm font-medium text-gray-700">This window crashed</p>
-        <p className="mt-1 text-xs text-gray-400 max-w-sm break-words">{error.message || String(error)}</p>
+        <p className="text-sm font-medium text-gray-700">
+          {stale ? 'This window needs the latest version of the app' : 'This window crashed'}
+        </p>
+        <p className="mt-1 text-xs text-gray-400 max-w-sm break-words">
+          {stale
+            ? 'A new version was deployed while this tab was open. Reload the page to pick it up.'
+            : error.message || String(error)}
+        </p>
       </div>
-      <button type="button" onClick={onReload}
+      <button type="button" onClick={stale ? () => window.location.reload() : onReload}
         className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-sm font-medium rounded-lg">
-        Reload window
+        {stale ? 'Reload page' : 'Reload window'}
       </button>
     </div>
   );

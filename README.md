@@ -353,6 +353,7 @@ All exports are named — `import { Modal, ... } from 'react-os-shell'`.
 | `Calendar` | Month grid with full keyboard navigation (arrows, Home/End, PageUp/Down) and `role="grid"` semantics. Single or range. The shared grid behind `DatePicker` and `DateRangePicker`. |
 | `DashboardTemplate`, `DataTablePage`, `FormLayoutPage`, `CheckoutTemplate`, `EmailTemplate`, `ChatTemplate`, `GalleryTemplate`, `AuthScreen`, `ErrorPage` | Zero-prop starter page templates composed from the primitives. |
 | `ErrorBoundary` | Catches a render crash and shows `ErrorPage` 500 rather than a blank screen. `showDetails` is off by default, so a visitor is never shown the stack; the fallback is `role="alert"`. Takes `onError` for reporting and `resetKeys` to recover on navigation. |
+| `AppUpdateBanner` | "A new version is available" for a tab that outlived a deploy, without a service worker. Polls the build's `version.json` (a minute apart from a visible tab, never from a hidden one, and once more the moment a hidden tab is shown) and, when the deployed version differs from `currentVersion`, pins a warning banner at the top centre above every window naming both versions with a primary "Refresh now" that reloads. Renders nothing until then. `versionUrl`, `pollMs`, `message`, `onRefresh`. Pair it with `installStaleChunkReload()` for the tab that opens a lazy window before it notices. |
 
 ### Providers + setters
 
@@ -377,6 +378,7 @@ All exports are named — `import { Modal, ... } from 'react-os-shell'`.
 | `useWindowManager()` | `{ openPage, openEntity, closeEntity, openWindows, … }` |
 | `useWindowDirty(dirty)` | Registers controlled unsaved state with the enclosing `PageWindow`; multiple registrations aggregate with any-dirty semantics, and calls outside a managed page window are ignored. |
 | `useTheme()` | `{ theme, resolved }` — current theme + system-resolved value. |
+| `useAppUpdate({ currentVersion, versionUrl?, pollMs? })` | The deployed version once it differs from the running one, else `null` — what `AppUpdateBanner` draws by, for a host that wants its own notice. Polling stops once an update is known. |
 | `useNewHotkey(handler)` | Cmd/Ctrl+N — for "create new entity" buttons. |
 | `useEditHotkey(handler)` | Alt+Shift+E — for "edit" toggle. |
 | `useModalNav({ onPrev, onNext })` | ←/→ to step through siblings inside a modal. |
@@ -663,6 +665,8 @@ so an app importing from both has one hook.
 | `glassStyle()` | Returns the theme-aware frosted-glass `style` object. |
 | `reportBug(submit)` | Captures a screenshot via `getDisplayMedia`, opens the dialog, hands the payload to your `submit`. |
 | `formatDate(iso)` | Locale-aware date formatter. |
+| `installStaleChunkReload(options?)` | Call once before the app mounts. A deploy replaces every lazy chunk; a tab opened before it crashes on the first lazy window it opens ("Failed to fetch dynamically imported module") and no remount can fix it. This listens for Vite's `vite:preloadError`, swallows the throw and reloads the page — once per 30 s cooldown, kept in `sessionStorage`, so a chunk still missing after the reload (a broken deploy, an offline network) crashes visibly instead of looping. Returns the uninstaller. |
+| `isStaleChunkError(error)` | True for the three engines' "module the server did not return" messages and Vite's CSS-preload line — what `WindowCrashedFallback` uses to offer "Reload page" instead of "Reload window". |
 | `budgetState(elapsed, budget)` | `no-reading` \| `no-budget` \| `within` \| `over` — the verdict `BudgetBar` draws by, exported so a run list sorts and filters by the same rule rather than re-deriving "late" a second time. |
 | `GROUP_COLORS`, `GROUP_COLORS_SOLID`, `groupColors(group, emphasis?)` | The status palette, both registers, as the class strings the badges emit — for a surface that has to build its own pill (a virtualised cell, a canvas legend) and must not guess at the colors. |
 | `severityOf(value, warn?, crit?)` | The `SeverityTone` (`success` \| `warning` \| `danger`) a reading earns against **inclusive** bounds; `null` when there's no reading or no usable bounds — the shell hardcodes no threshold. Backs `MetricBar`; use it to roll a `SidebarNavItem severity` up. |
