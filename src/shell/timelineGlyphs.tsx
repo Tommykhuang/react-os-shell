@@ -10,9 +10,23 @@ import type { ReactNode } from 'react';
  * which is what the chip row did before it was a chip row, with a rotated
  * square standing in for both a shipment and an inspection.
  */
-export type TimelineGlyphName = 'check' | 'doc' | 'flask' | 'flag' | 'truck';
+export type TimelineGlyphName = 'check' | 'doc' | 'flask' | 'flag' | 'truck' | 'receipt';
 
 const PATHS: Record<TimelineGlyphName, ReactNode> = {
+  /**
+   * An invoice — a sheet with a torn foot and one ruled line.
+   *
+   * Not the `doc` glyph, which is a drawing revision on the mould bar; on an
+   * order bar the two would sit side by side and a customer reading "document"
+   * twice would be told nothing. The zig-zag foot is what says "receipt" at 9 px.
+   */
+  receipt: (
+    <>
+      <path d="M3.4 1.9h5.2v7.2l-1.3-.9-1.3.9-1.3-.9-1.3.9z" fill="none" stroke="currentColor"
+        strokeWidth="1.2" strokeLinejoin="round" />
+      <path d="M4.9 4.4h2.2M4.9 6.1h2.2" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+    </>
+  ),
   // Completion.
   check: (
     <path d="M2.6 6.3 4.9 8.6 9.4 3.6" fill="none" stroke="currentColor" strokeWidth="1.9"
