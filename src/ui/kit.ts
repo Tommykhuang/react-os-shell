@@ -287,6 +287,12 @@ export { PopupMenu, PopupMenuItem, PopupMenuDivider, PopupMenuLabel } from '../s
 // ── Feedback ──
 export { default as toast } from '../shell/toast';
 export type { ToastOptions, ToastPlacement } from '../shell/toast';
+// "A new version is available" for a tab that outlived a deploy — polls the
+// build's version.json, no service worker. Pair it with
+// `installStaleChunkReload` (below) for the tab that opens a lazy window
+// before it notices.
+export { default as AppUpdateBanner, useAppUpdate, APP_UPDATE_POLL_MS } from '../shell/AppUpdateBanner';
+export type { AppUpdateBannerProps, UseAppUpdateOptions } from '../shell/AppUpdateBanner';
 
 // ── Dialogs (modal sheets, NOT shell windows — see Dialog's docstring) ──
 export { default as Dialog } from '../shell/Dialog';
@@ -357,6 +363,16 @@ export type { ShellStrings, ShellStringsOverride } from '../shell/strings';
 // GLASS_INPUT_BG is intentionally absent: its CSS lives in shell.css, so the
 // class would name a rule a ui-only consumer has not loaded.
 export { glassStyle, GLASS_DIVIDER } from '../utils/glass';
+// Reload once when a lazy chunk is gone from the server (a deploy replaced
+// the build under this tab). Call before the app mounts.
+export {
+  installStaleChunkReload,
+  isStaleChunkError,
+  STALE_CHUNK_RELOAD_KEY,
+  STALE_CHUNK_RELOAD_COOLDOWN_MS,
+  VITE_PRELOAD_ERROR_EVENT,
+} from '../shell/staleChunk';
+export type { StaleChunkReloadOptions } from '../shell/staleChunk';
 export { formatDate } from '../utils/date';
 export { default as useClickOutside } from '../hooks/useClickOutside';
 export { useIsMobile } from '../shell/useIsMobile';

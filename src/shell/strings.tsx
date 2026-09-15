@@ -118,6 +118,11 @@ export interface ShellStrings {
     newArticle: string;
     edit: string;
   };
+  /** The app-update banner (a deploy happened under a long-lived tab). */
+  update: {
+    available: string;
+    refreshNow: string;
+  };
 }
 
 export const DEFAULT_SHELL_STRINGS: ShellStrings = {
@@ -200,6 +205,10 @@ export const DEFAULT_SHELL_STRINGS: ShellStrings = {
     draft: 'Draft',
     newArticle: '+ New',
     edit: 'Edit',
+  },
+  update: {
+    available: 'A new version is available.',
+    refreshNow: 'Refresh now',
   },
 };
 
