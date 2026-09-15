@@ -68,8 +68,22 @@ export interface Milestone {
    *  render with a bracket below the bar showing they happened in parallel
    *  (e.g. two concurrent QA steps). Lookup the human-readable name from
    *  `MilestoneTimelineProps.phaseLabels`. Undated milestones take no part:
-   *  a bracket spans a range of dates. */
+   *  a bracket spans a range of dates. The `rail` variant draws no bracket. */
   phase?: string;
+  /**
+   * The few characters the `rail` variant draws over the dot — `v3` for a
+   * drawing revision. That variant draws no label, so this is what tells six
+   * revisions apart before the pointer arrives; captions that would overprint
+   * collapse to `v1–v4`. The `card` variant ignores it: it has the label.
+   */
+  caption?: string;
+  /**
+   * The milestone stands for something that has NOT happened, placed on the
+   * best date the record holds — a sample ORDERED on a day, drawn where the
+   * shipment will be. Hollow, and left out of the fill, so the bar never
+   * claims a shipment off an order date.
+   */
+  provisional?: boolean;
 }
 
 export interface MilestoneTimelineProps {
@@ -99,6 +113,34 @@ export interface MilestoneTimelineProps {
    *  appears under the bracket — e.g. `{ qa: 'QA & Sample' }`. Phases
    *  without an entry fall back to the phase key itself. */
   phaseLabels?: Record<string, string>;
+  /**
+   * `'card'` (the default) is the titled card: heading, meta line, two label
+   * lanes with `×N` pills, the pending column, a compressed axis with break
+   * glyphs. `'rail'` is the bar alone — no card, no heading, no label under
+   * any dot: every milestone is a dot with a popover, a revision carries its
+   * `caption`, the edge captions flank the rail, nothing is cut (idle
+   * stretches are drawn short rather than notched), and what has not happened
+   * is one dashed cap past the end of the axis. For a window whose stepper
+   * above the bar already names the stages, so the bar has only to place them.
+   */
+  variant?: 'card' | 'rail';
+  /**
+   * What the two ends of the rail are called — `{ start: 'Start', end:
+   * 'Ready' }`. `start` defaults to `Start · <date>`; `end` has no default.
+   * The `card` variant draws them inside the stage, the `rail` variant beside
+   * it, on the rail's own row.
+   */
+  edgeCaptions?: { start?: ReactNode; end?: ReactNode };
+  /**
+   * Milestones to light, by key: one soft band from the leftmost to the
+   * rightmost and every dot inside it, or a ring around a single one. A key
+   * with no dated milestone lights nothing — except the last undated one,
+   * which the `rail` variant draws as its cap. `null` lights nothing.
+   */
+  highlightKeys?: string[] | null;
+  /** The milestone under the pointer or the focus, by key, and `null` when
+   *  there is none. The other half of `highlightKeys`. */
+  onHoverChange?: (key: string | null) => void;
 }
 
 /**
@@ -145,6 +187,7 @@ const milestonePriority = (kind: MilestoneKind | undefined) => (kind === 'dfm' ?
  */
 export default function MilestoneTimeline({
   title, heading, subject, milestones, summary, endDate, phaseLabels,
+  variant = 'card', edgeCaptions, highlightKeys = null, onHoverChange,
 }: MilestoneTimelineProps) {
   // Captured once at mount so render stays idempotent — day-resolution markers
   // don't care that "today" doesn't tick while the view is open.
@@ -206,6 +249,8 @@ export default function MilestoneTimeline({
     onClick: m.onClick,
     onOpen: m.onOpen,
     priority: milestonePriority(m.kind),
+    caption: m.caption,
+    provisional: m.provisional,
   }));
 
   // A phase only renders a bracket when it has 2+ members — a single-member
@@ -225,6 +270,32 @@ export default function MilestoneTimeline({
       maxMs: Math.max(...ms),
     }));
 
+  const rail = variant === 'rail';
+  const track = (
+    <div className="select-none">
+      <TimelineTrack
+        axis={rail ? 'spread' : 'compressed'}
+        labels={rail ? 'none' : 'lanes'}
+        items={items}
+        pending={pending}
+        phases={phases}
+        startMs={startMs}
+        endMs={endMs}
+        todayMs={today}
+        edgeCaptions={edgeCaptions}
+        highlightKeys={highlightKeys}
+        onHoverChange={onHoverChange}
+        ariaLabel={`${title} milestones`}
+      />
+    </div>
+  );
+
+  // The rail variant is the track and nothing else: the window around it has
+  // already said what the bar is about, so a second heading would say it twice.
+  if (rail) {
+    return <div className="shrink-0" data-timeline-variant="rail">{track}</div>;
+  }
+
   return (
     <div className="shrink-0">
       <TimelineCard
@@ -233,19 +304,7 @@ export default function MilestoneTimeline({
         subject={subject}
         meta={meta}
       >
-        <div className="select-none">
-          <TimelineTrack
-            axis="compressed"
-            labels="lanes"
-            items={items}
-            pending={pending}
-            phases={phases}
-            startMs={startMs}
-            endMs={endMs}
-            todayMs={today}
-            ariaLabel={`${title} milestones`}
-          />
-        </div>
+        {track}
       </TimelineCard>
     </div>
   );
