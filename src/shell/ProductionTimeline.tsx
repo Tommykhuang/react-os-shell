@@ -4,7 +4,7 @@ import TimelineCard from './TimelineCard';
 import { TimelineGlyph, TimelineProgressIcon } from './timelineGlyphs';
 import TimelineTrack, {
   type TimelineMarker, type TimelineMarkerKind, type TimelineScrubProgress,
-  type TimelineTrackItem, type TimelineTrackPlayback, type TimelineTrackProps,
+  type TimelineTrackEndMark, type TimelineTrackItem, type TimelineTrackPlayback, type TimelineTrackProps,
 } from './TimelineTrack';
 
 /**
@@ -171,6 +171,10 @@ export interface ProductionTimelineSnapshot {
   /** Convenience: progress_number of the current report, looked up in the
    *  reports list. */
   currentReportProgressNumber?: string;
+  /** The PO's estimated completion as epoch ms, or null when it has none. The
+   *  rail variant draws it as the hollow mark on the window's right edge when
+   *  it is still ahead; the card states it in the meta line. */
+  estCompletionMs: number | null;
 }
 
 /** Owns all the state for a Production Timeline: scrub position, playback,
@@ -443,6 +447,7 @@ export function useProductionTimeline(opts: UseProductionTimelineOpts): Producti
     poNumber,
     currentReportId,
     currentReportProgressNumber,
+    estCompletionMs: toDayMs(poEstCompletionDate ?? null),
   };
 }
 
@@ -463,11 +468,16 @@ export function useProductionTimeline(opts: UseProductionTimelineOpts): Producti
 function TimelineScrubber({
   startMs, endMs, reports, markers, valueMs, activeId,
   onChange, onPickReport, onOpenReport, onOpenMarker, onDragStart, renderReportPreview,
-  reportLabel, playback, edgeCaptions,
+  reportLabel, playback, edgeCaptions, bare = false, endMark = null,
 }: {
   startMs: number;
   endMs: number;
   edgeCaptions?: TimelineTrackProps['edgeCaptions'];
+  /** The rail variant: no label under the active report, the 48 px floor
+   *  without the cut, captions flanking the rail. */
+  bare?: boolean;
+  /** The estimated completion, drawn on the right edge of a bare rail. */
+  endMark?: TimelineTrackEndMark | null;
   reports: TimelineReport[];
   markers: TimelineMarker[];
   /** What a report is called on the bar — see `ProductionTimelineProps`. The
@@ -515,8 +525,14 @@ function TimelineScrubber({
   return (
     <div className="select-none">
       <TimelineTrack
-        axis="linear"
-        labels="active"
+        // The card keeps time linear: a supplier's reports arrive weekly and a
+        // week is not an idle stretch to hide. The bare rail spreads instead —
+        // every stretch at least 48 px and nothing cut — because with no label
+        // lane to say which dot is which, two reports drawn as one are two
+        // reports nobody can tell apart.
+        axis={bare ? 'spread' : 'linear'}
+        labels={bare ? 'none' : 'active'}
+        endMark={bare ? endMark : null}
         items={items}
         markers={withOpen}
         startMs={startMs}
@@ -635,9 +651,31 @@ export interface ProductionTimelineProps {
    * Omitted, the track writes `Start · <date>` from the window's own left edge
    * and nothing on the right — which is the answer this card wants, and the
    * reason the prop is here at all is a caller who knows something the kit does
-   * not ("Start · PO issued", a contractual completion date).
+   * not ("Start · PO issued", a contractual completion date). The rail variant
+   * defaults to `Start` on the left and `Est. done` on the right while an
+   * estimate is still ahead, because the dates are a hover away there.
    */
   edgeCaptions?: TimelineTrackProps['edgeCaptions'];
+  /**
+   * `'card'` (the default) is the titled card: heading, window and lead time in
+   * the meta line, Play in the corner, the label under the active report, the
+   * status line and the legend in the footer. `'rail'` is the bar alone for a
+   * window whose own header already says what the order is: no card, no
+   * heading, no label under any dot — every report, shipment, inspection and
+   * invoice is a dot with a popover — the thumb and its date chip, the
+   * estimated completion as a hollow mark on the right edge while it is still
+   * ahead, and under the rail one row: Play, the return button when the thumb
+   * has been moved, and the "<report> · date · N% overall · N pc in stock" line.
+   */
+  variant?: 'card' | 'rail';
+  /**
+   * Playback is about to begin — a fresh run or a resume, fired before the
+   * thumb moves. For a window that keeps the bar in view while its table shows
+   * something else: the customer order window flips its items table from
+   * prices to production stages here, so Play is one press wherever the reader
+   * was, rather than a hunt for the toggle first.
+   */
+  onPlayStart?: () => void;
 }
 
 /**
@@ -657,7 +695,7 @@ export interface ProductionTimelineProps {
  * Pausing keeps the run alive so the track can carry on from the pixel it froze
  * at; stopping ends it, and the press after that rewinds to the first report.
  */
-function useReportPlayback(stops: number[], goTo: (ms: number) => void) {
+function useReportPlayback(stops: number[], goTo: (ms: number) => void, onStart?: () => void) {
   const [playing, setPlaying] = useState(false);
   /** True while a run exists. A pause is still a run — that is the difference
    *  between resuming and starting over. */
@@ -673,6 +711,9 @@ function useReportPlayback(stops: number[], goTo: (ms: number) => void) {
     // the next press picks it up.
     if (playing) { setPlaying(false); return; }
     if (stops.length === 0) return;
+    // The consumer hears first, so a window that shows the thumb's table only
+    // in one of its views can switch to it before the first frame moves.
+    onStart?.();
     // A fresh run starts at the first report: the question Play answers is "show
     // me the buildup", and the buildup starts at the beginning.
     if (!runningRef.current) {
@@ -699,6 +740,7 @@ export default function ProductionTimeline({
   snapshot, onPickReport, onOpenReport, onOpenMarker, renderReportPreview,
   onScrubProgress, heading = 'Production progress', edgeCaptions,
   reportLabel = (report) => report.progress_number, resetLabel,
+  variant = 'card', onPlayStart,
 }: ProductionTimelineProps) {
   const {
     reports, markers, poNumber,
@@ -706,6 +748,7 @@ export default function ProductionTimeline({
     scrubMs, setScrubMs,
     displayed,
     scrubbedAway, resetToCurrent, currentReportId, currentReportProgressNumber,
+    estCompletionMs,
   } = snapshot;
 
   // Ascending, because playback walks forward through the build; the hook takes
@@ -714,7 +757,7 @@ export default function ProductionTimeline({
     .map((report) => toDayMs(report.date))
     .filter((ms): ms is number => ms != null)
     .sort((a, b) => a - b);
-  const play = useReportPlayback(stops, setScrubMs);
+  const play = useReportPlayback(stops, setScrubMs, onPlayStart);
 
   // Render the timeline whenever there's at least one event of any kind to
   // show — production reports OR markers (e.g. a PO that has shipments
@@ -723,6 +766,7 @@ export default function ProductionTimeline({
 
   const shipmentMarkers = markers.filter(m => m.kind === 'shipment');
   const inspectionMarkers = markers.filter(m => m.kind === 'inspection');
+  const invoiceMarkers = markers.filter(m => m.kind === 'invoice');
 
   const totalStock = (displayed?.items ?? [])
     .reduce((s, it) => s + (Number(it.stock_qty) || 0), 0);
@@ -734,6 +778,90 @@ export default function ProductionTimeline({
   // number for a current report that is not in the list this bar was given.
   const currentReport = reports.find((report) => report.id === currentReportId);
   const currentLabel = currentReport ? reportLabel(currentReport) : currentReportProgressNumber;
+
+  const playButton = (
+    /* The glyph follows the state: a triangle while paused, two bars while
+       playing. A label that changes over an icon that does not is how a play
+       control ends up saying "Pause ▶". */
+    <button type="button" onClick={play.toggle} aria-pressed={play.playing}
+      title={play.playing ? 'Pause' : 'Play the timeline, report by report'}
+      className="rosh-tl-play text-gray-700 border-gray-300 hover:text-blue-600 hover:border-blue-600">
+      {play.playing
+        ? <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1.5h2.3v7H2zM5.7 1.5H8v7H5.7z" /></svg>
+        : <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1.2 8.4 5 2 8.8z" /></svg>}
+      <span>{play.playing ? 'Pause' : 'Play'}</span>
+    </button>
+  );
+  const resetButton = scrubbedAway && (resetLabel ?? currentLabel) ? (
+    <button type="button" onClick={() => { play.stop(); resetToCurrent(); }}
+      className="text-xs text-blue-600 underline-offset-4 hover:underline font-medium">
+      {resetLabel ?? `Back to ${currentLabel}`}
+    </button>
+  ) : null;
+  /** What the thumb is on, as one line. The rail prints it without "Showing":
+   *  under a bare rail the line IS the caption, not a sentence about one. */
+  const statusLine = (showing: boolean) => (
+    <p className="rosh-tl-status text-gray-800">
+      {displayed ? (
+        <>
+          {showing && 'Showing '}<b className="font-medium">{reportLabel(displayed)}</b>
+          <span className="text-gray-500">
+            {' · '}{fmtSliderDate(new Date(displayed.date).getTime())}
+            {' · '}{Math.round(overall)}% overall
+            {' · '}{totalStock.toLocaleString()} pc in stock
+          </span>
+        </>
+      ) : (
+        <span className="text-gray-500">No production report filed yet</span>
+      )}
+    </p>
+  );
+
+  if (variant === 'rail') {
+    // The estimate is on the bar only while it is still ahead: once it has
+    // passed, the window runs to today and the estimate is history the status
+    // line under the table already tells.
+    const estimateAhead = estCompletionMs != null && estCompletionMs >= endMs && endMs > startMs;
+    const endMark: TimelineTrackEndMark | null = estimateAhead
+      ? { key: '__estimate__', label: 'Estimated completion', dateText: fmtSliderDate(estCompletionMs) }
+      : null;
+    return (
+      <div className="shrink-0" data-timeline-variant="rail">
+        <TimelineScrubber
+          bare
+          endMark={endMark}
+          startMs={startMs}
+          endMs={endMs}
+          reports={reports}
+          markers={markers}
+          valueMs={scrubMs}
+          activeId={displayed?.id ?? ''}
+          onChange={setScrubMs}
+          onPickReport={onPickReport}
+          onOpenReport={onOpenReport}
+          onOpenMarker={onOpenMarker}
+          renderReportPreview={renderReportPreview}
+          reportLabel={reportLabel}
+          edgeCaptions={{
+            start: edgeCaptions?.start ?? 'Start',
+            end: edgeCaptions?.end ?? (estimateAhead ? 'Est. done' : undefined),
+          }}
+          onDragStart={play.stop}
+          playback={{
+            playing: play.playing,
+            onArrive: (_key, ms) => setScrubMs(ms),
+            onProgress: onScrubProgress,
+            onStop: play.stop,
+          }}
+        />
+        <div className="rosh-tl-railrow" data-timeline-part="rail-row">
+          {playButton}
+          {resetButton}
+          {statusLine(false)}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="shrink-0">
@@ -751,41 +879,13 @@ export default function ProductionTimeline({
         ]}
         actions={
           <>
-            {scrubbedAway && (resetLabel ?? currentLabel) && (
-              <button type="button" onClick={() => { play.stop(); resetToCurrent(); }}
-                className="text-xs text-blue-600 underline-offset-4 hover:underline font-medium">
-                {resetLabel ?? `Back to ${currentLabel}`}
-              </button>
-            )}
-            {/* The glyph follows the state: a triangle while paused, two bars
-                while playing. A label that changes over an icon that does not
-                is how a play control ends up saying "Pause ▶". */}
-            <button type="button" onClick={play.toggle} aria-pressed={play.playing}
-              title={play.playing ? 'Pause' : 'Play the timeline, report by report'}
-              className="rosh-tl-play text-gray-700 border-gray-300 hover:text-blue-600 hover:border-blue-600">
-              {play.playing
-                ? <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1.5h2.3v7H2zM5.7 1.5H8v7H5.7z" /></svg>
-                : <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1.2 8.4 5 2 8.8z" /></svg>}
-              <span>{play.playing ? 'Pause' : 'Play'}</span>
-            </button>
+            {resetButton}
+            {playButton}
           </>
         }
         footer={
           <>
-            <p className="rosh-tl-status text-gray-800">
-              {displayed ? (
-                <>
-                  Showing <b className="font-medium">{reportLabel(displayed)}</b>
-                  <span className="text-gray-500">
-                    {' · '}{fmtSliderDate(new Date(displayed.date).getTime())}
-                    {' · '}{Math.round(overall)}% overall
-                    {' · '}{totalStock.toLocaleString()} pc in stock
-                  </span>
-                </>
-              ) : (
-                <span className="text-gray-500">No production report filed yet</span>
-              )}
-            </p>
+            {statusLine(true)}
             {/* Chips, drawn with the track's own glyphs: a legend that keeps its
                 own copy of a shape is a legend that can describe a dot the rail
                 stopped drawing. */}
@@ -812,6 +912,15 @@ export default function ProductionTimeline({
                     <TimelineGlyph name="flask" />
                   </i>
                   Inspection
+                </span>
+              )}
+              {invoiceMarkers.length > 0 && (
+                <span className="border-gray-200 text-gray-500">
+                  <i aria-hidden="true" className="rosh-tl-glyph is-disc"
+                    style={{ background: 'var(--tl-invoice)', color: 'var(--tl-on-kind)' }}>
+                    <TimelineGlyph name="receipt" />
+                  </i>
+                  Invoice
                 </span>
               )}
             </div>

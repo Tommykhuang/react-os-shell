@@ -78,7 +78,7 @@ const LIGHT = merged(':root');
 const DARK = merged('[data-theme="dark"]', new Map(LIGHT));
 
 /** The kinds a mark can be painted in, plus the three supporting roles. */
-const KIND_TOKENS = ['--tl-dfm', '--tl-shipment', '--tl-testing', '--tl-completion', '--tl-inspection'];
+const KIND_TOKENS = ['--tl-dfm', '--tl-shipment', '--tl-testing', '--tl-completion', '--tl-inspection', '--tl-invoice'];
 const FILL_TOKENS = [...KIND_TOKENS, '--tl-focus'];
 const TL_TOKENS = ['--tl-accent', ...FILL_TOKENS, '--tl-on-kind', '--tl-soft'];
 

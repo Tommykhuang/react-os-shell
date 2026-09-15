@@ -38,6 +38,7 @@ export type TimelineTrackKind =
   | 'testing'    // accent disc with a flask — a test, a sign-off, a mould check
   | 'completion' // success disc with a check — the thing finished
   | 'inspection' // accent disc with a flask — a QC report filed against the order
+  | 'invoice'    // accent disc with a receipt — an invoice raised against the order
   | 'report'     // accent ring — a supplier's production-progress report
 ;
 
@@ -109,7 +110,7 @@ export interface TimelineTrackItem {
 }
 
 /** Visual classification for a `TimelineMarker`. */
-export type TimelineMarkerKind = 'shipment' | 'inspection';
+export type TimelineMarkerKind = 'shipment' | 'inspection' | 'invoice';
 
 /**
  * A non-progress event drawn on the track for context — a goods issue, a QC
@@ -143,6 +144,21 @@ export interface TimelineTrackPending {
   key: string;
   label: string;
   kind?: TimelineTrackKind;
+}
+
+/**
+ * The mark a bare rail draws ON its right edge — an estimated completion, a
+ * contractual delivery date: a day the axis already runs to, that has not
+ * happened. Hollow and dashed like the cap, but on the axis rather than past
+ * it, because the window's right edge IS that date. Its popover carries the
+ * label and `dateText`, so the date is a hover away and not printed on the bar.
+ */
+export interface TimelineTrackEndMark {
+  key: string;
+  label: string;
+  /** What the popover prints under the label — the date, in the user's format. */
+  dateText?: string;
+  detail?: ReactNode;
 }
 
 /** A stretch of parallel work, bracketed under the rail. */
@@ -264,6 +280,9 @@ export interface TimelineTrackProps {
   markers?: TimelineMarker[];
   /** Undated things, listed at the right edge (or under a vertical track). */
   pending?: TimelineTrackPending[];
+  /** A bare rail's mark on its own right edge — see `TimelineTrackEndMark`.
+   *  Drawn only with `labels="none"`; the card variants say it in the meta. */
+  endMark?: TimelineTrackEndMark | null;
   /** Where the filled part of the rail stops. Defaults to the last item, never
    *  past today; `null` draws no fill. With a thumb it follows the thumb. */
   fillToMs?: number | null;
@@ -519,6 +538,8 @@ const KIND_STYLES: Record<TimelineTrackKind, KindStyle> = {
   // A disc with a flask, not a diamond: a diamond is goods moving, and a bar
   // that draws an inspection as one has two meanings for a shape.
   inspection: { glyph: 'flask', token: 'var(--tl-inspection)' },
+  // A disc with a receipt: money asked for, on the day it was asked.
+  invoice: { glyph: 'receipt', token: 'var(--tl-invoice)' },
   report: {},
 };
 
@@ -536,6 +557,7 @@ const GLYPH_KIND: Partial<Record<TimelineGlyphName, TimelineTrackKind>> = {
   flask: 'testing',
   check: 'completion',
   truck: 'shipment',
+  receipt: 'invoice',
 };
 
 /** The kind a mark is drawn in, after a named glyph has had its say. */
@@ -1808,7 +1830,7 @@ export default function TimelineTrack({
   startMs, endMs, axis: axisMode = 'linear', items, markers = [], pending = [],
   fillToMs, todayMs, labels = 'lanes', activeKey = null, onActivate, thumb, playback,
   edgeCaptions, phases = [], currentKey, zoomRange = null, motion = true, ariaLabel,
-  highlightKeys = null, onHoverChange,
+  highlightKeys = null, onHoverChange, endMark = null,
 }: TimelineTrackProps) {
   // The bare rail: no label lanes, captions flanking the rail, undated things
   // as one cap past the axis. Decided once, because it changes the geometry,
@@ -1864,8 +1886,19 @@ export default function TimelineTrack({
     .filter((item) => Number.isFinite(item.ms) && inWindow(item.ms))
     .slice()
     .sort((a, b) => a.ms - b.ms);
+  // A spread axis anchors on the markers too. The floor exists so that no two
+  // marks are drawn as one, and on a bare rail a shipment three days after a
+  // report is as much a mark as the report; the card axes keep to the items,
+  // whose lanes and folds are what their floor was tuned against.
+  const markerTimes = axisMode === 'spread'
+    ? markers.map((marker) => new Date(marker.date).getTime()).filter((ms) => Number.isFinite(ms))
+    : [];
   const axis = compressTimeAxis(
-    [startMs, ...dated.filter((m) => m.ms > startMs && m.ms < endMs).map((m) => m.ms), endMs],
+    [
+      startMs,
+      ...[...dated.map((m) => m.ms), ...markerTimes].filter((ms) => ms > startMs && ms < endMs),
+      endMs,
+    ],
     axisPx,
     axisOptions(axisMode),
   );
@@ -1967,7 +2000,33 @@ export default function TimelineTrack({
       }];
     })()
     : [];
-  const marks = [...itemMarks, ...markerMarks, ...capMarks].sort((a, b) => a.x - b.x || a.ms - b.ms);
+  /**
+   * The end mark: the cap's drawing ON the axis's right edge, for a day the
+   * window already runs to — an estimated completion. Same node, same popover;
+   * no tail, because the axis keeps time all the way there. Only a bare rail
+   * draws one: the card variants state the same date in their meta line.
+   */
+  const endMarks: Mark[] = bare && endMark && !hasCap
+    ? [{
+      key: endMark.key,
+      ms: endMs,
+      x: axisPx,
+      baseX: axisPx,
+      kind: 'default',
+      label: endMark.label,
+      dateText: endMark.dateText ?? fmtSliderDate(endMs),
+      detail: endMark.detail,
+      glyph: undefined,
+      role: 'key' as NodeRole,
+      widthPx: MARK_OVERLAP_PX,
+      collapsible: false,
+      isItem: false,
+      provisional: false,
+      isCap: true,
+    }]
+    : [];
+  const marks = [...itemMarks, ...markerMarks, ...capMarks, ...endMarks]
+    .sort((a, b) => a.x - b.x || a.ms - b.ms);
 
   // The start anchor. The caption defaults to the window's own left edge, in the
   // reader's date format, because that is the fact the bar was failing to state.

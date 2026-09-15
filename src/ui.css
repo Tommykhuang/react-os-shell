@@ -413,6 +413,7 @@ html.rosh-reduce-transparency *::after {
   --tl-testing: var(--tl-accent);
   --tl-completion: var(--tl-accent);
   --tl-inspection: var(--tl-accent);
+  --tl-invoice: var(--tl-accent);
   /* The ink on a filled mark. `--on-accent` is white in both themes by
      `brand.css`'s own contract — the accent fill does not move, so neither does
      what reads on it. */
@@ -750,6 +751,11 @@ html.rosh-reduce-transparency *::after {
 /* The tail: from the end of the axis to the cap. Dashed, because it is not
    time — it is the distance to a date nobody has. */
 .rosh-tl-tail { position: absolute; height: 0; border-top: 2px dashed var(--line-strong); }
+/* The row under a bare production rail: Play, the return button when the thumb
+   has been moved, and the status line — one row, because the rail has no
+   header corner to put a control in. */
+.rosh-tl-railrow { display: flex; align-items: center; gap: 12px; margin-top: 4px; flex-wrap: wrap; }
+.rosh-tl-railrow .rosh-tl-status { margin: 0; }
 /* The cap: the start anchor's own drawing, at the other end and for the same
    reason, but a real button — its popover is where the undated things are
    named. `.is-lit` still reaches it, so a consumer can light "the end". */
