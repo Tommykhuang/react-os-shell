@@ -361,6 +361,11 @@ interface ModalProps {
   actions?: React.ReactNode;
   /** Footer actions (left side) — alternative to ModalActions portal */
   actionsLeft?: React.ReactNode;
+  /** The window is in an editing state — a draft, a duplicate, or Edit mode
+   *  on a detail — which is when the footer shows Undo/Redo for the form's
+   *  stack of its own accord. `WindowManager` sets it; a window that edits in
+   *  place says `useUndoCanEdit(true)` instead. */
+  editing?: boolean;
   /** Allow the window to be pinned on top of all others */
   allowPinOnTop?: boolean;
   /** Initial position hint */
@@ -1275,7 +1280,7 @@ export function ExposeBackdrop() {
 }
 
 
-export default function Modal({ open, onClose, title, icon, copyText, size = 'lg', dirty = false, onNext, onPrev, footer, bodyScroll, onMinimize, initialBox, actions, actionsLeft, allowPinOnTop, initialPosition, widget, compact, appStyle, flushBody, autoHeight, autoMinHeight, autoWidth, widgetMenu, dimensions, windowKey, openedFromKey, accentRgb, children }: ModalProps) {
+export default function Modal({ open, onClose, title, icon, copyText, size = 'lg', dirty = false, onNext, onPrev, footer, bodyScroll, onMinimize, initialBox, actions, actionsLeft, editing = false, allowPinOnTop, initialPosition, widget, compact, appStyle, flushBody, autoHeight, autoMinHeight, autoWidth, widgetMenu, dimensions, windowKey, openedFromKey, accentRgb, children }: ModalProps) {
   const isMobile = useIsMobile();
   // Mobile swipe-from-left-edge gesture: track horizontal offset of the panel.
   // 0 = at rest. While the user is dragging from the left edge, this grows
@@ -1423,9 +1428,15 @@ export default function Modal({ open, onClose, title, icon, copyText, size = 'lg
   // form has not mounted a pair of its own. It joins a footer that is there
   // for other reasons and never conjures one: a window that had no footer bar
   // keeps having none, and the mobile chrome hides the footer altogether.
+  // And it shows only where the window is known to be editing — a draft, a
+  // duplicate, Edit mode (`editing`, from WindowManager) — or where the form
+  // has said so (`useUndoCanEdit(true)`): a detail view holds state it may
+  // not let this user change, behind a status or a permission the shell
+  // cannot see, and offering a live pair there is not the shell's call.
   const undoCtx = useContext(UndoContext);
   const nestedInWindow = useContext(ModalIdContext) !== '';
   const showsUndo = !!undoCtx && !nestedInWindow && undoCtx.enabled && undoCtx.hasState
+    && (editing || undoCtx.declaredEditable)
     && !undoCtx.handMounted && hasFooterContent && !widget && !compact && !appStyle && !isMobile;
   // Every window must surface a clickable icon — it's the only entry point
   // to the window menu. Fall back to a generic "window" glyph when the

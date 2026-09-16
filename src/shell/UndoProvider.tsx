@@ -100,6 +100,12 @@ export function UndoProvider({ children, canEdit = true, perms, windowId }: Undo
   // nesting a `<UndoProvider canEdit={false}>` in its JSX would only cover the
   // children, while its own hooks would keep registering with the outer stack.
   const [readOnlyClaims, setReadOnlyClaims] = useState(0);
+  // The other direction: `useUndoCanEdit(true)` from a window that edits in
+  // place (a detail with inline cells behind a permission). The footer shows
+  // the pair for a window the shell knows to be editing — a draft, a
+  // duplicate, Edit mode — and otherwise only for one that has said so.
+  const [editClaims, setEditClaims] = useState(0);
+  const declaredEditable = editClaims > 0;
   const { hasAnyPerm } = useShellAuth();
 
   // Read-only means nothing to take back. Gating here rather than on the
@@ -129,6 +135,7 @@ export function UndoProvider({ children, canEdit = true, perms, windowId }: Undo
     if (slices.current.delete(id)) setSliceCount(c => c - 1);
   }, []);
   const claimReadOnly = useCallback((on: boolean) => { setReadOnlyClaims(c => c + (on ? 1 : -1)); }, []);
+  const claimEditable = useCallback((on: boolean) => { setEditClaims(c => c + (on ? 1 : -1)); }, []);
   // Whether the form has mounted its own `<UndoControls />`. The shell fills
   // in a pair only where there is none: a form written before the shell did
   // this keeps its pair where it deliberately put it — a plain overlay with no
@@ -150,6 +157,16 @@ export function UndoProvider({ children, canEdit = true, perms, windowId }: Undo
     parentClaimReadOnly(true);
     return () => parentClaimReadOnly(false);
   }, [parentClaimReadOnly, enabled]);
+  // And a hand mount inside a nested provider is a hand mount for the window:
+  // the form's own `useUndoableState` calls registered with the stack ABOVE,
+  // so without this the outer stack never hears the claim and the footer puts
+  // a live pair next to the form's own — two pairs on an editable sample.
+  const parentClaimOwnMount = parent?.claimOwnMount;
+  useEffect(() => {
+    if (!parentClaimOwnMount || !handMounted) return;
+    parentClaimOwnMount(true);
+    return () => parentClaimOwnMount(false);
+  }, [parentClaimOwnMount, handMounted]);
 
   // Runaway guard. A slice registered with a value that is freshly allocated
   // on every render — `useUndoable(rows.filter(r => r.on), ...)` rather than a
@@ -294,11 +311,11 @@ export function UndoProvider({ children, canEdit = true, perms, windowId }: Undo
 
   const value = useMemo<UndoContextValue>(() => ({
     register, unregister, record, undo, redo, clear, baseline, canUndo, canRedo, enabled,
-    hasState, handMounted, claimOwnMount, claimReadOnly,
+    hasState, handMounted, claimOwnMount, claimReadOnly, declaredEditable, claimEditable,
     undoLabel: canUndo ? state.past[state.past.length - 1].label : null,
     redoLabel: canRedo ? state.future[0].label : null,
   }), [register, unregister, record, undo, redo, clear, baseline, canUndo, canRedo, enabled,
-    hasState, handMounted, claimOwnMount, claimReadOnly, state.past, state.future]);
+    hasState, handMounted, claimOwnMount, claimReadOnly, declaredEditable, claimEditable, state.past, state.future]);
 
   // The controls are the shell's to show, not the form's to remember. A stack
   // with state in it and a user who may edit gets its Undo/Redo pair in the
@@ -394,12 +411,14 @@ export function useUndo(): UndoControlsApi {
  */
 export function useUndoCanEdit(canEdit: boolean) {
   const ctx = useContext(UndoContext);
-  const claim = ctx?.claimReadOnly;
+  const claimReadOnly = ctx?.claimReadOnly;
+  const claimEditable = ctx?.claimEditable;
   useEffect(() => {
-    if (!claim || canEdit) return;
+    const claim = canEdit ? claimEditable : claimReadOnly;
+    if (!claim) return;
     claim(true);
     return () => claim(false);
-  }, [claim, canEdit]);
+  }, [claimReadOnly, claimEditable, canEdit]);
 }
 
 export interface UndoableOptions {

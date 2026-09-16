@@ -24,7 +24,7 @@ import { setShellWindowRegistry } from '../src/windowRegistry/types';
 const ENTITY_TYPE = 'undo-auto-entity';
 
 type Variant = 'form' | 'no-state' | 'own-mount' | 'read-only' | 'nested-provider' | 'child-dialog'
-  | 'no-footer' | 'nested-read-only';
+  | 'no-footer' | 'nested-read-only' | 'view-mode' | 'declared' | 'nested-editable-own-mount';
 let variant: Variant = 'form';
 
 /** One undoable field and a button that changes it — the smallest form. */
@@ -63,6 +63,27 @@ function ReadOnlyField() {
   return <Field />;
 }
 
+/** A detail that edits in place behind a gate it has resolved itself. */
+function DeclaredField() {
+  useUndoCanEdit(true);
+  return <Field />;
+}
+
+/** The SampleForm shape when the sample is editable: the form's state on the
+ *  window's stack, a nested enabled provider in the JSX, and the form's own
+ *  hand mount inside that provider. */
+function EditableSampleForm() {
+  const [value, setValue] = useUndoableState('', { label: 'name' });
+  return (
+    <UndoProvider canEdit>
+      <ModalActions position="left"><UndoControls /></ModalActions>
+      <span data-testid="value">{value}</span>
+      <button type="button" data-testid="set" onClick={() => setValue('typed')}>Set</button>
+      <Save />
+    </UndoProvider>
+  );
+}
+
 function ChildDialog() {
   const [open, setOpen] = useState(true);
   return (
@@ -78,7 +99,7 @@ function ChildDialog() {
   );
 }
 
-function Body() {
+function Body({ editing, setEditing }: { editing: boolean; setEditing: (v: boolean) => void }) {
   switch (variant) {
     case 'form': return <><Field /><Save /></>;
     case 'no-state': return <><div data-testid="static">nothing to undo here</div><Save /></>;
@@ -88,6 +109,15 @@ function Body() {
     case 'child-dialog': return <><ChildDialog /><Save /></>;
     case 'no-footer': return <Field />;
     case 'nested-read-only': return <LockedForm />;
+    case 'view-mode': return (
+      <>
+        <Field /><Save />
+        <span data-testid="mode">{editing ? 'editing' : 'viewing'}</span>
+        <button type="button" data-testid="enter-edit" onClick={() => setEditing(true)}>Edit</button>
+      </>
+    );
+    case 'declared': return <><DeclaredField /><Save /></>;
+    case 'nested-editable-own-mount': return <EditableSampleForm />;
   }
 }
 
@@ -96,7 +126,7 @@ setShellWindowRegistry({
     endpoint: '/undo-auto-entity/',
     selfFetching: true,
     title: () => 'Undo auto-mount test',
-    render: () => <Body />,
+    render: (_entity, _onClose, _entityId, editing, setEditing) => <Body editing={!!editing} setEditing={setEditing!} />,
   },
 });
 
@@ -108,9 +138,13 @@ function Opener({ id }: { id: string }) {
   return <div id="taskbar-windows" />;
 }
 
+/** A saved record opens in view mode; everything else is a draft (`new-`),
+ *  which WindowManager treats as an editing state. */
+const SAVED: Variant[] = ['view-mode', 'declared'];
+
 async function openWindow(v: Variant) {
   variant = v;
-  const id = String(++seq);
+  const id = SAVED.includes(v) ? String(++seq) : `new-${++seq}`;
   const panelSelector = `[data-modal-panel][data-window-key="${ENTITY_TYPE}:${id}"]`;
   localStorage.setItem('access_token', 'undo-auto-mount-test');
   localStorage.setItem('erp_open_windows', '[]');
@@ -194,6 +228,36 @@ test('a nested read-only provider makes the window read-only: no pair, and ⌘Z 
   pressKey('z', { meta: true });
   await flush();
   assert.equal(panel().querySelector('[data-testid="value"]')!.textContent, 'typed', 'nothing was recorded to step back to');
+});
+
+test('a saved record in view mode gets no pair; Edit mode turns it on', async (t) => {
+  const { mounted, panel } = await openWindow('view-mode');
+  t.after(() => mounted.unmount());
+  assert.equal(panel().querySelector('[data-testid="mode"]')!.textContent, 'viewing');
+  assert.equal(pairs(panel()).length, 0, 'a detail that merely holds state is not offered a live pair');
+
+  click(panel().querySelector('[data-testid="enter-edit"]'), 'the Edit button');
+  await flush();
+  await flush();
+  assert.equal(panel().querySelector('[data-testid="mode"]')!.textContent, 'editing');
+  assert.equal(pairs(panel()).length, 1, 'Edit mode is an editing state the shell knows about');
+  assert.equal(pairs(panel())[0].dataset.undoControls, 'shell');
+});
+
+test('a view-mode window that says useUndoCanEdit(true) gets the pair', async (t) => {
+  const { mounted, panel } = await openWindow('declared');
+  t.after(() => mounted.unmount());
+  const pair = pairs(panel());
+  assert.equal(pair.length, 1, 'the form resolved its own gate and said so');
+  assert.equal(pair[0].dataset.undoControls, 'shell');
+});
+
+test('a hand mount inside a nested editable provider counts for the window: one pair, the form\'s', async (t) => {
+  const { mounted, panel } = await openWindow('nested-editable-own-mount');
+  t.after(() => mounted.unmount());
+  const pair = pairs(panel());
+  assert.equal(pair.length, 1, 'no second, shell-mounted pair beside the form\'s own');
+  assert.equal(pair[0].dataset.undoControls, 'form');
 });
 
 test('on the mobile chrome the shell mounts nothing, and a form\'s own pair still shows', async (t) => {

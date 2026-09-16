@@ -8,7 +8,10 @@ title: Undo/Redo is shown by the window footer, not mounted by each form
   had a working ⌘Z and nothing on screen. Now the `Modal` reads the stack
   `WindowManager` mounts above it and renders the pair leftmost in the footer
   as soon as the form registers state (`useUndoable` / `useUndoableState`) and
-  the user may edit. It joins a footer that is there for other reasons and
+  the window is editing — a draft, a duplicate, Edit mode on a detail — or the
+  form has said `useUndoCanEdit(true)` (a detail that edits in place behind a
+  status or permission the shell cannot see decides for itself; a view that
+  merely holds state gets nothing). It joins a footer that is there for other reasons and
   never conjures one — a window with no footer bar keeps having none, a window
   with nothing to take back shows no dead pair, a dialog a form opens gets
   none in its own footer, and the mobile chrome, which hides the footer, gets

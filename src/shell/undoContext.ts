@@ -24,7 +24,9 @@ export interface UndoContextValue {
   undo: () => void;
   redo: () => void;
   clear: () => void;
-  baseline: () => void;
+  /** Widened here as well as in #245's provider so the two cannot resolve
+   *  against each other silently: `key` names the record. */
+  baseline: (key?: string | number | null) => void;
   canUndo: boolean;
   canRedo: boolean;
   undoLabel: string | null;
@@ -42,6 +44,12 @@ export interface UndoContextValue {
   /** A form's own read-only claim — `useUndoCanEdit(false)` — counted rather
    *  than set, so two components saying it and one leaving do not re-enable. */
   claimReadOnly: (on: boolean) => void;
+  /** True while a form has said `useUndoCanEdit(true)` — the window edits in
+   *  place and may be edited, which the shell cannot tell from a detail view
+   *  that merely holds state. It is what lets the footer show the pair outside
+   *  an editing state (draft, duplicate, Edit mode). */
+  declaredEditable: boolean;
+  claimEditable: (on: boolean) => void;
 }
 
 export const UndoContext = createContext<UndoContextValue | null>(null);
