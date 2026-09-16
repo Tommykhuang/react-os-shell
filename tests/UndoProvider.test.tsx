@@ -429,6 +429,101 @@ test('baseline(key): a refetch of the same record with nothing landing keeps the
   closeAllWindows();
 });
 
+/** The GoodsReceiptForm shape: a header field hydrated once, and a line grid
+ *  re-seeded from the server on EVERY arrival until the user touches it —
+ *  a fresh array each time, the same rows inside — followed by a bare
+ *  `baseline()`. */
+type Row = { id: string; qty: string };
+function GridForm({ api }: { api: Partial<FormApi & { arrive: (rows: Row[]) => void; rows: () => Row[] }> }) {
+  const [loaded, setLoaded] = useState<Row[] | null>(null);
+  const [name, setName] = useUndoableState('', { label: 'name' });
+  const [rows, setRows] = useUndoableState<Row[]>([], { label: 'line items' });
+  const { baseline } = useUndo();
+  api.set = setName;
+  api.arrive = setLoaded;
+  api.rows = () => rows;
+  useEffect(() => {
+    if (!loaded) return;
+    // A fresh array of fresh objects, exactly as a `.map` over the server
+    // rows produces — identity says "changed", content says "the same".
+    setRows(loaded.map(r => ({ ...r })));
+    baseline();
+  }, [loaded, baseline, setRows]);
+  return <span data-testid="value">{name}</span>;
+}
+
+test('an array slice re-seeded with equal content on a refetch keeps the history', async () => {
+  openWindow('win-grid-refetch');
+  const api: Partial<FormApi & { arrive: (rows: Row[]) => void; rows: () => Row[] }> = {};
+  const r = render(<UndoProvider windowId="win-grid-refetch"><GridForm api={api} /></UndoProvider>);
+
+  const rows: Row[] = [{ id: 'a', qty: '20' }, { id: 'b', qty: '40' }];
+  act(() => { api.arrive!(rows); });
+  await flush();
+  type(api, 'header edit');
+  await flush();
+  // The background refetch: the same rows come round in a new array.
+  act(() => { api.arrive!(rows.map(x => ({ ...x }))); });
+  await flush();
+  await flush();
+
+  pressKey('z', { meta: true });
+  await flush();
+  assert.equal(valueOf(r), '', 'the header edit is still there to undo — an equal grid is not a record landing');
+
+  // And a grid that genuinely changed on the server IS one: the contract.
+  type(api, 'header edit again');
+  await flush();
+  act(() => { api.arrive!([{ id: 'a', qty: '99' }, { id: 'b', qty: '40' }]); });
+  await flush();
+  await flush();
+  pressKey('z', { meta: true });
+  await flush();
+  assert.equal(valueOf(r), 'header edit again', 'a changed record re-baselines, as before');
+  assert.equal(api.rows!()[0].qty, '99');
+
+  r.unmount();
+  closeAllWindows();
+});
+
+/** The Notepad shape before it passes the note id: a bare `baseline()` as the
+ *  record-switch wipe. Documented, not endorsed — see `baseline(key)`. */
+function BareSwitchForm({ api }: { api: Partial<FormApi & { arrive: (v: string) => void }> }) {
+  const [loaded, setLoaded] = useState<string | null>(null);
+  const [name, setName] = useUndoableState('', { label: 'name' });
+  const { baseline } = useUndo();
+  api.set = setName;
+  api.arrive = setLoaded;
+  useEffect(() => {
+    if (loaded === null) return;
+    setName(loaded);
+    baseline();
+  }, [loaded, baseline, setName]);
+  return <span data-testid="value">{name}</span>;
+}
+
+test('a bare baseline() across a record switch with equal values keeps the history — the trap baseline(key) exists for', async () => {
+  openWindow('win-bare-switch');
+  const api: Partial<FormApi & { arrive: (v: string) => void }> = {};
+  const r = render(<UndoProvider windowId="win-bare-switch"><BareSwitchForm api={api} /></UndoProvider>);
+
+  act(() => { api.arrive!('note A'); });
+  await flush();
+  type(api, 'typed on A');
+  await flush();
+  // Note B holds exactly what is on screen; without a key the shell cannot
+  // tell this from a refetch of A, and A's edit survives onto B.
+  act(() => { api.arrive!('typed on A'); });
+  await flush();
+  await flush();
+  pressKey('z', { meta: true });
+  await flush();
+  assert.equal(valueOf(r), 'note A', 'documents the behaviour a form gets without the key');
+
+  r.unmount();
+  closeAllWindows();
+});
+
 // ── Recording ─────────────────────────────────────────────────────────────
 
 test('a re-render that changes nothing records no step', async () => {

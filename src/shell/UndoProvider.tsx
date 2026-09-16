@@ -5,6 +5,7 @@ import {
   undoReducer,
   emptyUndoState,
   matchUndoHotkey,
+  sameValue,
   type UndoSnapshot,
   type UndoHotkeyEvent,
 } from '../hooks/undoHistory';
@@ -20,7 +21,10 @@ interface Slice {
 interface UndoContextValue {
   register: (id: string, slice: Slice) => void;
   unregister: (id: string) => void;
-  record: (label: string, coalesceKey: string | null) => void;
+  /** `change` is the slice's before/after; while a baseline settles it is what
+   *  decides whether a record landed (a value differing by content) or the
+   *  same one came round again in a fresh object. */
+  record: (label: string, coalesceKey: string | null, change?: { prev: unknown; next: unknown }) => void;
   undo: () => void;
   redo: () => void;
   clear: () => void;
@@ -145,11 +149,16 @@ export function UndoProvider({ children, canEdit = true, perms, windowId }: Undo
   // Set by a `baseline()` / `clear()` — see them below `record`.
   const seeded = useRef(false);
 
-  const record = useCallback((label: string, coalesceKey: string | null) => {
+  const record = useCallback((label: string, coalesceKey: string | null, change?: { prev: unknown; next: unknown }) => {
     // A change landing while a `baseline()` settles is the seed it was called
     // for — noted, not recorded, and it is what decides whether the history
-    // goes (see the lifting effect below).
-    if (suspended.current) { seeded.current = true; return; }
+    // goes (see the lifting effect below). By content, not identity: a line
+    // grid re-seeded from a refetch is a fresh array of the same rows, and
+    // that is the record coming round again, not a record landing.
+    if (suspended.current) {
+      if (!change || !sameValue(change.prev, change.next)) seeded.current = true;
+      return;
+    }
     if (!enabled || pending.current) return;
     const r = runaway.current;
     if (r.tripped) return;
@@ -451,7 +460,7 @@ export function useUndoable<T>(value: T, apply: (next: T) => void, opts: Undoabl
     if (Object.is(value, last.current)) return;
     // Record before moving `last`: the snapshot the provider takes reads this
     // slice through `getLast`, and must see the value from before the change.
-    c.record(optsRef.current.label, optsRef.current.coalesceKey);
+    c.record(optsRef.current.label, optsRef.current.coalesceKey, { prev: last.current, next: value });
     last.current = value;
   }, [value]);
 }

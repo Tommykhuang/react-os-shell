@@ -10,8 +10,11 @@ title: baseline() keeps the history unless a record lands; a mount-effect seed i
   every return from a spreadsheet, so Undo/Redo went grey a moment after a
   bulk import with nothing saved (Purchase Invoice, then Goods Receipt and
   Goods Issue by the same shape). Now the history goes only when a slice takes
-  a value while the baseline settles — a real seed — and `clear()`, the
-  after-save call, is its own operation that always empties it.
+  a value while the baseline settles — a real seed, judged by content rather
+  than identity, so a line grid re-seeded from a refetch as a fresh array of
+  the same rows is the record coming round again and not a record landing —
+  and `clear()`, the after-save call, is its own operation that always
+  empties it.
 - **`baseline(key)` names the record.** A form that hydrates per id passes it,
   and a switch to another record drops the history whether or not the new
   values happen to equal the old — the case where nothing records, and an undo

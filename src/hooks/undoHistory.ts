@@ -127,3 +127,27 @@ export function matchUndoHotkey(e: UndoHotkeyEvent): 'undo' | 'redo' | null {
 
   return action;
 }
+
+/**
+ * Whether two slice values are the same *by content* — the question a
+ * settling `baseline()` asks of a value that lands while it settles.
+ *
+ * Recording is by identity (`Object.is`): a fresh array is a change, and that
+ * is right for an edit. A hydration is different. A form re-seeding its line
+ * grid from a refetched record maps the server rows into a fresh array every
+ * time, with the same ids, quantities and prices inside — a record has
+ * "landed", by identity, and nothing has changed. Telling those apart is what
+ * keeps a header edit's history alive across a background refetch of an
+ * untouched grid. Serialisable data compares by its JSON; anything that is
+ * not (a function, a cycle, a Map) reads as changed, which is the safe answer.
+ */
+export function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
