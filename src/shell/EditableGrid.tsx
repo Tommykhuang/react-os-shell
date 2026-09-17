@@ -1,4 +1,5 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
+import type { HTMLAttributes } from 'react';
 import { createPortal } from 'react-dom';
 import { escapeHtml } from '../utils/escapeHtml';
 
@@ -59,6 +60,28 @@ export function withSpareRow(rows: string[][], colCount: number): string[][] {
 }
 
 /**
+ * A cell's editable node, whose text is written into the DOM only when the
+ * text itself changes.
+ *
+ * The node is `contentEditable`, so while a cell is being typed into the DOM
+ * holds keys the grid has not committed yet (they commit on blur). React 19
+ * decides whether to rewrite `dangerouslySetInnerHTML` by comparing the prop
+ * OBJECT, not its `__html` (React 18 compared the string), so a fresh
+ * `{ __html }` on every render made any re-render of the grid wipe those keys
+ * and put the caret back at the start: typing 100 into a production-progress
+ * cell saved 001 once the form's debounced check re-rendered it. Holding the
+ * object steady per value restores the React 18 behaviour on both versions.
+ */
+function CellText({ text, ...props }: Omit<HTMLAttributes<HTMLDivElement>, 'children' | 'dangerouslySetInnerHTML'> & { text: string }) {
+  // Escaped, NOT raw: a cell can hold text this grid never authored — a CSV
+  // export of storefront form answers is typed by anonymous visitors. Every
+  // read path takes `textContent`, so nothing here wants markup, and escaping
+  // round-trips through `textContent` unchanged.
+  const html = useMemo(() => ({ __html: escapeHtml(text) }), [text]);
+  return <div {...props} dangerouslySetInnerHTML={html} />;
+}
+
+/**
  * Lightweight editable grid with spreadsheet-like features:
  * - Click + drag to select a range of cells
  * - Ctrl+C / Cmd+C to copy selection as tab-delimited text
@@ -84,6 +107,27 @@ export default function EditableGrid({ columns, data, onChange, onColumnsChange,
   const [dragCol, setDragCol] = useState<number | null>(null);
   const [dragOverCol, setDragOverCol] = useState<number | null>(null);
   const [editingCell, setEditingCell] = useState<CellPos | null>(null);
+
+  // A printable key on a cell that is not being edited commits that key and
+  // opens the cell for editing; the caret then has to move past it before the
+  // NEXT key lands. A layout effect runs in the same commit, ahead of the next
+  // key event. A requestAnimationFrame (the old way) waited for a frame, so a
+  // quick second key went in before the first — and never, in a hidden tab.
+  const caretToEnd = useRef<CellPos | null>(null);
+  useLayoutEffect(() => {
+    const pos = caretToEnd.current;
+    if (!pos || pos.row !== editingCell?.row || pos.col !== editingCell?.col) return;
+    caretToEnd.current = null;
+    const el = tableRef.current?.querySelector<HTMLElement>(`[data-row="${pos.row}"][data-col="${pos.col}"]`);
+    if (!el) return;
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }, [editingCell]);
 
   // Range selection state
   const [selAnchor, setSelAnchor] = useState<CellPos | null>(null);
@@ -751,7 +795,7 @@ export default function EditableGrid({ columns, data, onChange, onColumnsChange,
                       onDoubleClick={(e) => {
                         if (e.target === e.currentTarget && !col.readOnly) setEditingCell({ row: ri, col: ci });
                       }}>
-                      <div
+                      <CellText
                         contentEditable={isEditing}
                         suppressContentEditableWarning
                         tabIndex={0}
@@ -782,30 +826,13 @@ export default function EditableGrid({ columns, data, onChange, onColumnsChange,
                           if (!isEditing && !col.readOnly && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
                             e.preventDefault();
                             updateCell(ri, ci, e.key);
+                            caretToEnd.current = { row: ri, col: ci };
                             setEditingCell({ row: ri, col: ci });
-                            // Place cursor at end after React re-renders
-                            requestAnimationFrame(() => {
-                              const el = tableRef.current?.querySelector(`[data-row="${ri}"][data-col="${ci}"]`) as HTMLElement;
-                              if (el) {
-                                el.focus();
-                                const range = document.createRange();
-                                range.selectNodeContents(el);
-                                range.collapse(false);
-                                const sel = window.getSelection();
-                                sel?.removeAllRanges();
-                                sel?.addRange(range);
-                              }
-                            });
                             return;
                           }
                           handleKeyDown(e, ri, ci);
                         }}
-                        // Escaped, NOT raw: a cell can hold text this grid never
-                        // authored — a CSV export of storefront form answers is
-                        // typed by anonymous visitors. Every read path below takes
-                        // `textContent`, so nothing here wants markup, and escaping
-                        // round-trips through `textContent` unchanged.
-                        dangerouslySetInnerHTML={{ __html: escapeHtml(row[ci] || '') }}
+                        text={row[ci] || ''}
                       />
                       {isFillCorner && (
                         <div
