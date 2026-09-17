@@ -378,6 +378,34 @@ test('a tooltip appears on focus, is dismissible with Escape, and describes its 
   view.unmount();
 });
 
+test('the first dot gets a clamped, aimed tooltip like every other dot', () => {
+  // The bubble was placed by an effect that re-ran when the open dot's x
+  // changed. That x reads 0 with no bubble open, and 0 again for the dot on the
+  // start day, so opening the first dot changed nothing the effect watched:
+  // the bubble mounted with no `left`, and its `translateX(-50%)` pushed half
+  // of it out past the card's left edge (PO#31605, supplier portal).
+  // jsdom has no layout, so the bubble is given a width to clamp.
+  const proto = window.HTMLElement.prototype;
+  const offsetWidth = Object.getOwnPropertyDescriptor(proto, 'offsetWidth')!;
+  Object.defineProperty(proto, 'offsetWidth', {
+    configurable: true,
+    get(this: HTMLElement) { return this.getAttribute('role') === 'tooltip' ? 150 : 0; },
+  });
+  try {
+    const view = render(track());
+    const first = dots(view.container).find((d) => d.dataset.timelineKey === 'start')!;
+    act(() => { first.focus(); });
+
+    const tip = view.container.querySelector<HTMLElement>('[role="tooltip"]')!;
+    assert.match(tip.textContent ?? '', /Project Initiated/);
+    assert.equal(tip.style.left, '75px', 'held a half-width in from the left edge');
+    assert.equal(tip.style.getPropertyValue('--rosh-tl-arrow'), '0px', 'the arrow still points at the dot');
+    view.unmount();
+  } finally {
+    Object.defineProperty(proto, 'offsetWidth', offsetWidth);
+  }
+});
+
 test('the entrance plays once and a hover does not restart it', () => {
   // `hoveredKey` is state, so the card re-renders on every pointer move. A
   // reveal gated on anything but the mark set would re-animate the whole thing

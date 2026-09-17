@@ -2451,7 +2451,10 @@ export default function TimelineTrack({
 
   const bubbleNode = railNodes.find((node) => node.key === bubbleKey) ?? null;
   const bubbleX = bubbleNode ? bubbleNode.x : 0;
-  useMeasureEffect(() => { aimBubble(tipRef.current, bubbleX); }, [aimBubble, bubbleX]);
+  // Keyed on the open dot as well as its x: the dot on the start day sits at
+  // x = 0, the same value this reads with no bubble open, so watching x alone
+  // never aimed that dot's bubble and it hung half off the left edge.
+  useMeasureEffect(() => { aimBubble(tipRef.current, bubbleX); }, [aimBubble, bubbleKey, bubbleX]);
 
   // The snap highlight: a mark the thumb has just passed lights up for a moment,
   // so a scrub that crosses four reports reads as four events rather than as a
