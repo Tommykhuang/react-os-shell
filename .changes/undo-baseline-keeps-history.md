@@ -18,7 +18,11 @@ title: baseline() keeps the history unless a record lands; a mount-effect seed i
 - **`baseline(key)` names the record.** A form that hydrates per id passes it,
   and a switch to another record drops the history whether or not the new
   values happen to equal the old — the case where nothing records, and an undo
-  would otherwise land on the wrong record.
+  would otherwise land on the wrong record. Pass it from the first load on (the
+  first named call has nothing to compare with, so it never clears by itself),
+  and pass `null` rather than `undefined` for a record with no id yet. A form
+  that relies on a bare `baseline()` to clear the history on a switch must pass
+  the key before it takes this version.
 - **A default set and baselined in the same mount effect is no longer a
   step.** The lifting effect ran on mount and saw a suspension a child's effect
   had just begun in that same commit; lifting it there let the child's own seed

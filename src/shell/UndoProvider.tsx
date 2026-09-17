@@ -368,6 +368,13 @@ export interface UndoControlsApi {
    * record — `baseline(id)` — and a switch to another record drops the history
    * even when the new record's values happen to equal the old, so an undo can
    * never land on the wrong record.
+   *
+   * Name it from the first load on. The first named call has no earlier name
+   * to compare with, so it never drops the history by itself: a switch away
+   * from a record that was baselined bare keeps its history. And a record with
+   * no id yet passes `null`, not `undefined` — `baseline(undefined)` is a bare
+   * call, so `baseline(record?.id)` loses the switch guard on a create route;
+   * write `baseline(record?.id ?? null)`.
    */
   baseline: (key?: string | number | null) => void;
   /** False when the user may not edit this record, so custom UI can hide
