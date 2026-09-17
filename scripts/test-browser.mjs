@@ -95,6 +95,16 @@ try {
       jsx: 'automatic',
       define: { __PKG_VERSION__: '"browser-test"' },
       logLevel: 'warning',
+      // `REACT_DIR` bundles a different React: a directory that holds `react`
+      // and `react-dom`, such as a consuming app's node_modules. This package
+      // develops against React 18 while its consumers run 19, and the two do
+      // not always behave alike (editableGridTyping).
+      ...(process.env.REACT_DIR && {
+        alias: {
+          react: join(resolve(process.env.REACT_DIR), 'react'),
+          'react-dom': join(resolve(process.env.REACT_DIR), 'react-dom'),
+        },
+      }),
     });
     const bundle = result.outputFiles[0].text;
 
