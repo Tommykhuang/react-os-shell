@@ -20,7 +20,10 @@ export interface UndoSlice {
 export interface UndoContextValue {
   register: (id: string, slice: UndoSlice) => void;
   unregister: (id: string) => void;
-  record: (label: string, coalesceKey: string | null) => void;
+  /** `change` is the slice's before/after; while a baseline settles it is what
+   *  decides whether a record landed (a value differing by content) or the
+   *  same one came round again in a fresh object. */
+  record: (label: string, coalesceKey: string | null, change?: { prev: unknown; next: unknown }) => void;
   undo: () => void;
   redo: () => void;
   clear: () => void;

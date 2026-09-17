@@ -402,12 +402,14 @@ export function useUndo(): UndoControlsApi {
  *     useUndoCanEdit(!isLocked);
  *
  * and while the value is false the stack records nothing, ⌘Z is left to the
- * browser, and the footer shows no controls. Prefer this over nesting a
- * `<UndoProvider canEdit={false}>` in the form's JSX: that shadows the stack
- * for the *children* only, while the form's own `useUndoableState` calls —
- * made in the same component, above the nested provider in the tree — keep
- * registering with the outer one, which stays enabled. The nested provider
- * remains right for a read-only *child* subtree.
+ * browser, and the footer shows no controls. A nested
+ * `<UndoProvider canEdit={false}>` in the form's JSX says the same thing: it
+ * shadows the stack for its children and forwards the read-only claim to the
+ * stack above it — the one the form's own `useUndoableState` calls, made above
+ * it in the tree, register with. Either form of the claim makes the whole
+ * window read-only; the hook just needs no extra element. `useUndoCanEdit(true)`
+ * is the positive claim: a window that edits in place outside Edit mode asks
+ * the footer for the pair with it.
  */
 export function useUndoCanEdit(canEdit: boolean) {
   const ctx = useContext(UndoContext);
