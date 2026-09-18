@@ -12,6 +12,8 @@ import assert from 'node:assert/strict';
 // First — installs the DOM globals before react-dom evaluates.
 import { act, pressKey, render } from './dom';
 import { fakeFrames } from './frames';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { TimelineGlyph, type TimelineGlyphName } from '../src/shell/timelineGlyphs';
 import ProductionTimeline, {
   useProductionTimeline,
   calcOverall,
@@ -149,8 +151,8 @@ test('a current report pins the slider, scrubbing away is detectable, and reset 
 
 test('the bar names the PO, states its window and lead time, and legends the kinds it has', () => {
   const markers: TimelineMarker[] = [
-    { id: 'gi', date: '2026-05-12', kind: 'shipment', label: 'GI-1' },
-    { id: 'qc', date: '2026-05-13', kind: 'inspection', label: 'QC-1' },
+    { id: 'gi', date: '2026-05-08', kind: 'shipment', label: 'GI-1' },
+    { id: 'qc', date: '2026-05-24', kind: 'inspection', label: 'QC-1' },
   ];
   function Bar() {
     const snap = useProductionTimeline({ ...BASE, poStatus: 'completed', markers });
@@ -174,6 +176,70 @@ test('the bar names the PO, states its window and lead time, and legends the kin
   assert.match(text, /Shipment/);
   assert.match(text, /Inspection/);
   assert.equal(container.querySelectorAll('button[aria-label^="PP-"]').length, 2, 'one dot per report');
+  unmount();
+});
+
+// ── The shipment says it is one ─────────────────────────────────────────────
+
+/** The `d` of every path in a piece of markup, which is what identifies a glyph
+ *  without pinning the attribute order two renderers happen to write. */
+const paths = (html: string) => [...html.matchAll(/ d="([^"]+)"/g)].map((m) => m[1]);
+
+const glyphPaths = (name: TimelineGlyphName) =>
+  paths(renderToStaticMarkup(<TimelineGlyph name={name} />));
+
+test('a shipment is a diamond with a truck in it, on the rail and in the legend', () => {
+  // "The shipment does not show" (Henry, 2026-09-15, translated). It had no
+  // glyph: once every kind was painted in the one accent, the note above
+  // `KIND_STYLES` — the glyph is what tells the kinds apart — left the shipment
+  // as the kind that had nothing to tell them with, and on a scrubber it is not
+  // captioned either unless the pointer is on it.
+  const markers: TimelineMarker[] = [
+    { id: 'gi', date: '2026-05-08', kind: 'shipment', label: 'GI-1' },
+    { id: 'qc', date: '2026-05-24', kind: 'inspection', label: 'QC-1' },
+  ];
+  function Bar() {
+    const snap = useProductionTimeline({ ...BASE, poStatus: 'completed', markers });
+    return <ProductionTimeline snapshot={snap} onPickReport={() => {}} />;
+  }
+  const { container, unmount } = render(<Bar />);
+
+  const truck = glyphPaths('truck');
+  assert.ok(truck.length >= 2, 'the truck glyph draws nothing');
+
+  const diamond = container.querySelector('.rosh-tl-node.is-diamond');
+  assert.ok(diamond, 'no shipment dot on the rail');
+  assert.deepEqual(paths(diamond.innerHTML), truck, 'the shipment dot is a bare diamond again');
+
+  // And it is not the inspection's flask: two kinds, two glyphs, one colour.
+  const disc = container.querySelector('[aria-label^="QC-1"]');
+  assert.ok(disc);
+  assert.deepEqual(paths(disc.innerHTML), glyphPaths('flask'));
+  assert.notDeepEqual(paths(diamond.innerHTML), paths(disc.innerHTML));
+
+  // The legend draws from the same file, so a chip cannot describe a shape the
+  // rail stopped drawing.
+  const chip = [...container.querySelectorAll('.rosh-tl-legend > span')]
+    .find((span) => (span.textContent ?? '').includes('Shipment'));
+  assert.ok(chip, 'no shipment chip in the legend');
+  assert.deepEqual(paths(chip.innerHTML), truck, 'the legend chip is still a bare diamond');
+  unmount();
+});
+
+test('a marker may name its own glyph, for two shipments that are not the same event', () => {
+  const markers: TimelineMarker[] = [
+    { id: 'gi', date: '2026-05-08', kind: 'shipment', label: 'GI-1' },
+    { id: 'sample', date: '2026-05-24', kind: 'shipment', label: 'Samples', glyph: 'doc' },
+  ];
+  function Bar() {
+    const snap = useProductionTimeline({ ...BASE, poStatus: 'completed', markers });
+    return <ProductionTimeline snapshot={snap} onPickReport={() => {}} />;
+  }
+  const { container, unmount } = render(<Bar />);
+  assert.deepEqual(paths(container.querySelector('[aria-label^="GI-1"]')!.innerHTML), glyphPaths('truck'));
+  assert.deepEqual(paths(container.querySelector('[aria-label^="Samples"]')!.innerHTML), glyphPaths('doc'));
+  // Both are still shipments — the override is the glyph, not the shape.
+  assert.equal(container.querySelectorAll('.rosh-tl-node.is-diamond').length, 2);
   unmount();
 });
 
@@ -406,6 +472,124 @@ test('renderReportPreview fills the reports that carry none, and never overrides
   view.unmount();
 });
 
+// ── Marks too close to be drawn apart ───────────────────────────────────────
+
+test('two reports a day apart fold into one mark, and the scrubber still reaches both', () => {
+  // "Marks that are too close overlap each other" (Henry, 2026-09-15,
+  // translated, on a customer's order with two shipments a few days apart). A
+  // day is ten pixels on this window, and a report ring is sixteen: one of the
+  // two was drawn under the other, where it could not be hovered, read or
+  // counted. Folding is a DRAWING decision and nothing else — the thumb still
+  // has a stop on each of them, and each still activates its own report.
+  const near1: TimelineReport = { ...R1, id: 'n1', progress_number: 'PP-9', date: '2026-05-20' };
+  const near2: TimelineReport = { ...R2, id: 'n2', progress_number: 'PP-10', date: '2026-05-21' };
+  const picked: string[] = [];
+  const view = bar({ reports: [near2, near1], onPickReport: (id) => picked.push(id) });
+  const at = (selector: string) => view.container.querySelector<HTMLElement>(selector);
+  const items = () => view.container.querySelectorAll<HTMLElement>('[data-timeline-node="item"]');
+
+  const fold = at('[data-timeline-node="fold"]');
+  assert.ok(fold, 'the two reports are still drawn on top of each other');
+  assert.equal(fold.getAttribute('data-timeline-count'), '2');
+  assert.match(fold.getAttribute('aria-label') ?? '', /PP-9 · 20\/05\/2026, PP-10 · 21\/05\/2026/);
+  assert.equal(items().length, 0, 'and neither is drawn twice');
+  assert.equal(
+    fold.closest('li')?.getAttribute('aria-current'), 'step',
+    '"you are here" is on the fold that holds the current report',
+  );
+
+  // The slider is untouched: two stops, and the thumb is on the later report.
+  const slider = at('[role="slider"]')!;
+  assert.equal(slider.getAttribute('aria-valuemax'), '1', 'both reports are still stops');
+  assert.match(slider.getAttribute('aria-valuetext') ?? '', /^PP-10 · /);
+  pressKey('ArrowLeft', { target: slider });
+  assert.match(at('.rosh-tl-status')!.textContent ?? '', /Showing PP-9/, 'the arrows still step reports');
+
+  // Opening the fold spreads the run and hands each report back its own dot.
+  act(() => { fold.click(); });
+  const open = items();
+  assert.equal(open.length, 2, 'the fold opened into its members');
+  const xs = [...open].map((dot) => parseFloat(dot.style.left));
+  assert.ok(xs[1] - xs[0] >= 16, `the members are still ${xs[1] - xs[0]}px apart after opening`);
+  act(() => { open[0].click(); });
+  assert.deepEqual(picked, ['n1'], 'and a member activates its own report');
+  view.unmount();
+});
+
+// ── Whose identity the bar prints ───────────────────────────────────────────
+
+test('reportLabel renames the report everywhere the bar states its identity', () => {
+  // "The customer portal must not show the standalone production-progress
+  // identity anywhere" (Henry, 2026-09-15, translated). `PP#10147` is an
+  // internal document number, and the card was printing it in six places on a
+  // window about the customer's own order — the caption over the thumb, the
+  // popover header, the dot's accessible name and title, the slider's value
+  // text, and the status line. All six read the same two strings, so one
+  // function reaches all six.
+  const view = bar({ reports: REPORTS, reportLabel: (report) => `Update ${report.date}` });
+  const { container } = view;
+  const text = container.textContent ?? '';
+
+  assert.match(text, /Showing Update 2026-05-20/, 'the status line');
+  assert.ok(container.querySelector('[aria-label^="Update 2026-05-20"]'), "the dot's accessible name");
+  assert.match(
+    container.querySelector('[role="slider"]')!.getAttribute('aria-valuetext') ?? '',
+    /^Update 2026-05-20 · /,
+    'what a screen reader reads for the slider value',
+  );
+  assert.match(
+    container.querySelector('[data-timeline-part="label"]')?.textContent ?? '',
+    /Update 2026-05-20/,
+    'the one caption a scrubber draws',
+  );
+  // The whole point: the number is nowhere on the card.
+  assert.doesNotMatch(text, /PP-/, `the report number survived somewhere: ${text}`);
+  view.unmount();
+
+  // And the admin window, which passes none of this, is untouched.
+  const plain = bar({ reports: REPORTS });
+  assert.match(plain.container.textContent ?? '', /Showing PP-2/);
+  assert.ok(plain.container.querySelector('[aria-label^="PP-2"]'), 'the default is progress_number');
+  plain.unmount();
+});
+
+/** The card with a current report, so the reset affordance has somewhere to go.
+ *  Clicking another dot is what scrubs away from it — the same gesture a reader
+ *  makes. */
+function withCurrent(rest: Partial<React.ComponentProps<typeof ProductionTimeline>> = {}) {
+  function Bar() {
+    const snap = useProductionTimeline({
+      ...BASE, poStatus: 'completed', currentReportId: 'r2', currentReportDate: '2026-05-20',
+    });
+    return <ProductionTimeline snapshot={snap} onPickReport={() => {}} {...rest} />;
+  }
+  const view = render(<Bar />);
+  // The earliest report, by position rather than by name: the name is what half
+  // of these specs are changing.
+  act(() => { view.container.querySelectorAll<HTMLElement>('[data-timeline-node="item"]')[0].click(); });
+  const reset = () => view.container
+    .querySelector('.rosh-tl-head-actions button:not(.rosh-tl-play)');
+  return { ...view, reset };
+}
+
+test('the reset button names the current report the same way, and resetLabel replaces it', () => {
+  const plain = withCurrent();
+  assert.equal(plain.reset()?.textContent, 'Back to PP-2', 'the default admin wording');
+  plain.unmount();
+
+  const renamed = withCurrent({ reportLabel: (report) => `Update ${report.date}` });
+  assert.equal(
+    renamed.reset()?.textContent, 'Back to Update 2026-05-20',
+    'the button names the report the way the rest of the bar does',
+  );
+  renamed.unmount();
+
+  // A portal that has hidden the identity says where the button goes instead.
+  const named = withCurrent({ reportLabel: () => 'Progress report', resetLabel: 'Back to latest' });
+  assert.equal(named.reset()?.textContent, 'Back to latest');
+  named.unmount();
+});
+
 test('calcOverall weights the four in-flight stages, capped per stage', () => {
   // Weighted sums of binary fractions: compare to the nearest thousandth.
   const near = (actual: number, expected: number, msg?: string) =>
@@ -469,4 +653,141 @@ test('a caller may write the caption itself — edgeCaptions goes straight throu
     'Contractual delivery',
   );
   view.unmount();
+});
+
+// ── The rail variant ────────────────────────────────────────────────────────
+//
+// The customer order window puts the bar under its own status steps, in both
+// of its Items views, so the card's heading, meta line and label lanes said
+// what the window already said (Victor Mau, 2026-09-15: "too complex"). The
+// rail is the bar alone: Play on the row under it beside the status line, the
+// estimate as a hollow mark on the right edge while it is still ahead, and
+// invoices on the bar beside the shipments and inspections.
+
+const iso = (offsetDays: number) => new Date(Date.now() + offsetDays * DAY_MS).toISOString().slice(0, 10);
+
+function railBar(extra: Partial<React.ComponentProps<typeof ProductionTimeline>> = {}, opts: Partial<UseProductionTimelineOpts> = {}) {
+  function Bar() {
+    const snap = useProductionTimeline({ ...BASE, ...opts });
+    return <ProductionTimeline snapshot={snap} onPickReport={() => {}} variant="rail" {...extra} />;
+  }
+  return render(<Bar />);
+}
+
+test('the rail is the bar alone: no card, no heading, no label under the active report, Play on the row under it', () => {
+  const view = railBar({}, { poStatus: 'completed' });
+  const { container } = view;
+  assert.ok(container.querySelector('[data-timeline-variant="rail"]'));
+  assert.equal(container.querySelector('.rosh-tl-card'), null, 'no card chrome');
+  assert.doesNotMatch(container.textContent ?? '', /Production progress/, 'no heading');
+  assert.doesNotMatch(container.textContent ?? '', /lead time/, 'no meta line');
+  assert.equal(container.querySelector('[data-timeline-part="label"]'), null, 'no label under the active dot');
+  assert.equal(container.querySelector('.rosh-tl-legend'), null, 'no legend row');
+  // The row under the rail holds Play and the status line, and the line is the
+  // caption itself rather than a sentence about one.
+  const row = container.querySelector('[data-timeline-part="rail-row"]');
+  assert.ok(row, 'no rail row');
+  assert.ok(row.querySelector('.rosh-tl-play'), 'Play is on the rail row');
+  const status = row.querySelector('.rosh-tl-status')?.textContent ?? '';
+  assert.match(status, /^PP-2 · /, `the status line opens with the report, got "${status}"`);
+  assert.doesNotMatch(status, /Showing/);
+  // The flank captions are the rail's defaults.
+  assert.equal(container.querySelector('[data-timeline-part="start-caption"]')?.textContent, 'Start');
+  // Every report is still a dot with a popover — the card's dots, unchanged.
+  assert.equal(container.querySelectorAll('button[aria-label^="PP-"]').length, 2);
+  view.unmount();
+});
+
+test('onPlayStart hears a press before the thumb moves, on a fresh run and on a resume', () => {
+  const frames = fakeFrames();
+  const heard: string[] = [];
+  const view = railBar({
+    onPlayStart: () => heard.push(`start@${view.container.querySelector<HTMLElement>('[data-timeline-part="thumb"]')?.style.left}`),
+  }, { poStatus: 'completed' });
+  const play = () => view.container.querySelector<HTMLElement>('.rosh-tl-play')!;
+  const thumbLeft = () => parseFloat(view.container.querySelector<HTMLElement>('[data-timeline-part="thumb"]')!.style.left);
+  try {
+    const before = thumbLeft();
+    act(() => { play().click(); });
+    assert.equal(heard.length, 1, 'one press, one start');
+    assert.equal(heard[0], `start@${before}px`, 'the consumer heard it before the thumb rewound');
+    act(() => { play().click(); });
+    assert.equal(heard.length, 1, 'a pause is not a start');
+    act(() => { play().click(); });
+    assert.equal(heard.length, 2, 'a resume is: the table has to be showing the build again');
+  } finally {
+    frames.restore();
+    view.unmount();
+  }
+});
+
+test('an invoice is a disc with a receipt in it, on the rail and in the card legend', () => {
+  const markers: TimelineMarker[] = [
+    { id: 'ci', date: '2026-05-15', kind: 'invoice', label: 'CI-1', detail: '668 pcs · 49,268.00' },
+    { id: 'gi', date: '2026-05-08', kind: 'shipment', label: 'GI-1' },
+  ];
+  const view = railBar({}, { poStatus: 'completed', markers });
+  const invoice = view.container.querySelector('[aria-label^="CI-1"]');
+  assert.ok(invoice, 'no invoice mark on the rail');
+  assert.deepEqual(paths(invoice.innerHTML), glyphPaths('receipt'));
+  assert.notDeepEqual(paths(invoice.innerHTML), glyphPaths('doc'), 'not the drawing-revision document');
+  assert.match(invoice.getAttribute('aria-label') ?? '', /CI-1 · 15\/05\/2026 · 668 pcs/);
+  assert.ok(!invoice.classList.contains('is-diamond'), 'a disc, not a shipment diamond');
+  view.unmount();
+
+  // The card legends it too, from the same glyph file.
+  function Card() {
+    const snap = useProductionTimeline({ ...BASE, poStatus: 'completed', markers });
+    return <ProductionTimeline snapshot={snap} onPickReport={() => {}} />;
+  }
+  const card = render(<Card />);
+  const chip = [...card.container.querySelectorAll('.rosh-tl-legend > span')]
+    .find((span) => (span.textContent ?? '').includes('Invoice'));
+  assert.ok(chip, 'no invoice chip in the legend');
+  assert.deepEqual(paths(chip.innerHTML), glyphPaths('receipt'));
+  card.unmount();
+});
+
+test('the estimate is a hollow mark on the right edge while it is still ahead, and gone once it has passed', () => {
+  // Ahead: the window runs to the estimate, and that edge is the estimate.
+  const ahead = railBar({}, { poStatus: 'in_production', poEstCompletionDate: iso(40) });
+  const cap = ahead.container.querySelector('[data-timeline-node="cap"]');
+  assert.ok(cap, 'no end mark for an estimate still ahead');
+  assert.match(cap.getAttribute('aria-label') ?? '', /^Estimated completion · /);
+  assert.equal(ahead.container.querySelector('[data-timeline-part="tail"]'), null, 'on the axis, not past it');
+  assert.equal(ahead.container.querySelector('[data-timeline-part="end-caption"]')?.textContent, 'Est. done');
+  ahead.unmount();
+
+  // Passed: the window runs to today, and the estimate is history the status
+  // line under the table already tells.
+  const passed = railBar({}, { poStatus: 'in_production', poEstCompletionDate: '2026-07-01' });
+  assert.equal(passed.container.querySelector('[data-timeline-node="cap"]'), null);
+  assert.equal(passed.container.querySelector('[data-timeline-part="end-caption"]'), null);
+  passed.unmount();
+
+  // A caller's own end caption wins over the default.
+  const named = railBar({ edgeCaptions: { end: 'Contract date' } }, { poStatus: 'in_production', poEstCompletionDate: iso(40) });
+  assert.equal(named.container.querySelector('[data-timeline-part="end-caption"]')?.textContent, 'Contract date');
+  named.unmount();
+});
+
+test('the rail spreads the reports so two a week apart on a long window are two dots', () => {
+  // A 20-month window with two reports ten days apart: linear, they are 6 px
+  // apart on a 600 px track and fold into one; spread, each stretch is held to
+  // 48 px and both are dots of their own.
+  const reports: TimelineReport[] = [
+    { ...R2, date: '2025-01-11' },
+    { ...R1, date: '2025-01-01' },
+  ];
+  const opts = { ...BASE, reports, poProductionStartDate: '2024-11-09', poEstCompletionDate: '2026-09-15', poStatus: 'completed' };
+  function Card() { const snap = useProductionTimeline(opts); return <ProductionTimeline snapshot={snap} onPickReport={() => {}} />; }
+  function Rail() { const snap = useProductionTimeline(opts); return <ProductionTimeline snapshot={snap} onPickReport={() => {}} variant="rail" />; }
+  const card = render(<Card />);
+  assert.equal(card.container.querySelectorAll('[data-timeline-node="fold"]').length, 1, 'the card folds them');
+  card.unmount();
+  const rail = render(<Rail />);
+  assert.equal(rail.container.querySelectorAll('[data-timeline-node="fold"]').length, 0, 'the rail does not');
+  assert.equal(rail.container.querySelectorAll('[data-timeline-node="item"]').length, 2);
+  assert.equal(rail.container.querySelector('[data-timeline-part="break"]'), null, 'and nothing is cut');
+  rail.unmount();
 });

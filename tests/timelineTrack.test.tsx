@@ -27,7 +27,8 @@ import TimelineTrack, {
   type TimelineScrubProgress, type TimelineTrackItem, type TimelineTrackThumb,
 } from '../src/shell/TimelineTrack';
 import {
-  clusterLabel, clusterMarks, compressTimeAxis, packLabelLanes, TRACK_LABEL_LANE_COUNT,
+  clusterLabel, clusterMarks, clusterOverlaps, compressTimeAxis, packLabelLanes,
+  MARK_OVERLAP_PX, MIXED_KIND, TRACK_LABEL_LANE_COUNT,
 } from '../src/shell/timelineGeometry';
 import { toDayMs } from '../src/shell/timelineDates';
 import { withConsoleError } from './capture-console';
@@ -75,6 +76,37 @@ test('every class the track names has a rule in ui.css', () => {
   const used = new Set([...source.matchAll(/rosh-tl-[a-z-]+/g)].map((m) => m[0]));
   const missing = [...used].filter((name) => !declared.has(name)).sort();
   assert.deepEqual(missing, [], `classes with no rule in ui.css: ${missing.join(', ')}`);
+});
+
+test('the marks stand above the scrubber hit strip, and under the thumb and the bubble', () => {
+  // The scrubber draws a 24px `.rosh-tl-hit` strip over the rail so a 6px line
+  // can be pressed by a hand. It is rendered AFTER the list of dots, and while
+  // neither declared a z-index the strip won the paint order and took every
+  // pointer event aimed at a mark: no hover popover, no click, no `onOpen`, on
+  // every track with a thumb. The stacking order IS the fix, so it is asserted
+  // where a regression would be written rather than only in the browser lane —
+  // jsdom does no hit testing, which is why the specs below could never have
+  // caught it.
+  const root = process.env.REPO_ROOT ?? resolve(import.meta.dirname, '..');
+  const sheet = readFileSync(join(root, 'src/ui.css'), 'utf-8');
+  /** The z-index one rule declares, or null where it declares none. */
+  const layerOf = (selector: string): number | null => {
+    const at = sheet.indexOf(`${selector} {`);
+    assert.notEqual(at, -1, `no \`${selector}\` rule in ui.css`);
+    const declared = /z-index:\s*(-?\d+)/.exec(sheet.slice(at, sheet.indexOf('}', at)));
+    return declared ? Number(declared[1]) : null;
+  };
+
+  // `auto` is 0 for this comparison: both are painted in the layer's own
+  // stacking context, where a declared 0 and an auto tie and DOM order breaks it.
+  const strip = layerOf('.rosh-tl-hit') ?? 0;
+  const mark = layerOf('.rosh-tl-nodes .rosh-tl-node');
+  const thumb = layerOf('.rosh-tl-thumb');
+  const bubble = layerOf('.rosh-tl-bubble, .rosh-tl-popover');
+  assert.ok(mark !== null, 'the marks declare no z-index, so the hit strip is over them again');
+  assert.ok(mark > strip, `a mark at ${mark} is under the hit strip at ${strip}`);
+  assert.ok(thumb !== null && mark < thumb, `a mark at ${mark} is over the thumb at ${thumb}`);
+  assert.ok(bubble !== null && thumb < bubble, `the bubble at ${bubble} is under the thumb`);
 });
 
 // ── The accessible shape ────────────────────────────────────────────────────
@@ -246,6 +278,45 @@ test('three of a kind in a row always fold; two fold only when they would collid
   assert.equal(first.type === 'cluster' && first.members.map((m) => m.key).join(','), 'a,b,c');
 });
 
+test('marks nearer than one mark width fold, of any kind; ones that clear it do not', () => {
+  // The DOTS' collision, which is not the labels'. `clusterMarks` above asks
+  // whether two labels clear each other and folds only iterations of one step;
+  // this asks whether two 14–16 px dots clear each other, and at that range what
+  // they are stops mattering — a mark printed under another mark cannot be
+  // hovered, read or counted whatever kind it is.
+  const mark = (key: string, x: number, kind = 'dfm', collapsible = true) =>
+    ({ key, x, kind, collapsible, widthPx: 40 });
+  const types = (groups: ReturnType<typeof clusterOverlaps>) => groups.map((g) => g.type);
+
+  assert.deepEqual(types(clusterOverlaps([mark('a', 100), mark('b', 110)])), ['cluster'], '10px apart');
+  assert.deepEqual(
+    types(clusterOverlaps([mark('a', 100), mark('b', 120)])), ['item', 'item'],
+    '20px apart clears a 16px mark',
+  );
+  // Exactly one mark width is the first pitch that clears.
+  assert.deepEqual(types(clusterOverlaps([mark('a', 100), mark('b', 100 + MARK_OVERLAP_PX)])), ['item', 'item']);
+  assert.deepEqual(types(clusterOverlaps([mark('a', 100), mark('b', 115.9)])), ['cluster']);
+
+  // A run chains: each mark is judged against the one before it, so three marks
+  // eight pixels apart are one fold rather than two overlapping pairs.
+  const chained = clusterOverlaps([mark('a', 0), mark('b', 8), mark('c', 16), mark('d', 60)]);
+  assert.deepEqual(types(chained), ['cluster', 'item']);
+  assert.equal(chained[0].type === 'cluster' && chained[0].members.map((m) => m.key).join(','), 'a,b,c');
+
+  // Same kind throughout: the fold reports it, and the caller draws that kind's
+  // own shape and glyph. Mixed: there is no glyph true of all of them.
+  const same = clusterOverlaps([mark('a', 0, 'shipment'), mark('b', 9, 'shipment')]);
+  assert.equal(same[0].type === 'cluster' && same[0].kind, 'shipment');
+  const mixed = clusterOverlaps([mark('a', 0, 'shipment'), mark('b', 9, 'inspection')]);
+  assert.equal(mixed[0].type === 'cluster' && mixed[0].kind, MIXED_KIND);
+
+  // A mark that settles something never folds into a LABEL pill, and folds here
+  // like any other: being important does not make it visible under a neighbour.
+  const settles = clusterOverlaps([mark('a', 0, 'completion', false), mark('b', 9, 'dfm')]);
+  assert.deepEqual(types(settles), ['cluster']);
+  assert.deepEqual(types(clusterOverlaps([])), [], 'and an empty bar folds nothing');
+});
+
 test('the pill is named for the step, not for the first revision of it', () => {
   assert.equal(clusterLabel([{ label: 'DFM v1' }, { label: 'DFM v2' }]), 'DFM ×2');
   assert.equal(clusterLabel([{ label: 'Sample 3' }, { label: 'Sample 4' }]), 'Sample ×2');
@@ -288,6 +359,61 @@ test('one tab stop, and the arrows walk the rail', () => {
   });
   assert.equal((document.activeElement as HTMLElement).dataset.timelineKey, 'start');
   view.unmount();
+});
+
+test('the bubble of a dot on the first day is placed like any other', () => {
+  // The first dot sits at x = 0 — the same value the track holds for "no
+  // bubble open" — so the effect that places the bubble never ran for it, and
+  // the stylesheet's `translateX(-50%)` hung half the bubble off the window's
+  // left edge (SO#33555's "Order Placed", cut to "der Placed").
+  const view = render(track());
+  const first = dots(view.container).find((d) => d.dataset.timelineKey === 'start')!;
+  act(() => { first.focus(); });
+  const tip = view.container.querySelector<HTMLElement>('[role="tooltip"]')!;
+  assert.match(tip.textContent ?? '', /Project Initiated/);
+  assert.equal(tip.style.left, '0px', 'placed, not left to the stylesheet');
+  view.unmount();
+});
+
+test('a bubble stays inside the window that owns the timeline', () => {
+  // UI-11: anything anchored to a control keeps to its window. jsdom lays
+  // nothing out, so the window, the layer and the bubble's width are stubbed.
+  const proto = window.HTMLElement.prototype;
+  const rect = proto.getBoundingClientRect;
+  const width = Object.getOwnPropertyDescriptor(proto, 'offsetWidth')!;
+  const box = (left: number, w: number) => ({
+    x: left, y: 0, left, right: left + w, width: w, top: 0, bottom: 600, height: 600,
+    toJSON: () => ({}),
+  }) as DOMRect;
+  proto.getBoundingClientRect = function stub(this: HTMLElement) {
+    if (this.matches('[data-modal-panel]')) return box(100, 300);
+    if (this.matches('.rosh-tl-layer')) return box(90, 1000);
+    return box(0, 0);
+  };
+  Object.defineProperty(proto, 'offsetWidth', {
+    configurable: true,
+    get(this: HTMLElement) { return this.matches('[role="tooltip"]') ? 200 : 0; },
+  });
+  try {
+    const view = render(<div data-modal-panel>{track()}</div>);
+    const open = (key: string) => {
+      const node = dots(view.container).find((d) => d.dataset.timelineKey === key)!;
+      act(() => { node.focus(); });
+      return view.container.querySelector<HTMLElement>('[role="tooltip"]')!;
+    };
+    // The window spans 100–400 on screen and the layer starts at 90, so a
+    // 200px bubble (8px from each edge) may be centred from 118 to 202.
+    const first = open('start');
+    assert.equal(first.style.left, '118px', 'pushed right, off the window\'s left edge');
+    assert.equal(first.style.getPropertyValue('--rosh-tl-arrow'), '-18px',
+      'and its arrow still aims at the dot');
+    const last = open('done');
+    assert.equal(last.style.left, '202px', 'pulled left, off the window\'s right edge');
+    view.unmount();
+  } finally {
+    proto.getBoundingClientRect = rect;
+    Object.defineProperty(proto, 'offsetWidth', width);
+  }
 });
 
 test('a tooltip appears on focus, is dismissible with Escape, and describes its dot', () => {

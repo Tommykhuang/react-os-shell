@@ -27,8 +27,8 @@ export interface UndoContextValue {
   undo: () => void;
   redo: () => void;
   clear: () => void;
-  /** Widened here as well as in #245's provider so the two cannot resolve
-   *  against each other silently: `key` names the record. */
+  /** `key` names the record, so a switch to another one drops the history —
+   *  see `useUndo().baseline`. */
   baseline: (key?: string | number | null) => void;
   canUndo: boolean;
   canRedo: boolean;

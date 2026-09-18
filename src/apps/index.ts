@@ -93,6 +93,10 @@ export type { BuiltinAppId, BuiltinAppInfo } from './_about';
 // Preview's static pdfjs-dist import — into a host's startup bundle.
 export { setPdfPreview } from './_previewStage';
 export { setSpreadsheetPreview } from './_spreadsheetStage';
+// Routes a stored file to whichever of the two can read it (UI-18). Same
+// module family for the same reason: it imports the stages, not the apps.
+export { openAttachment, attachmentKind } from './openAttachment';
+export type { OpenableAttachment, OpenAttachmentOptions, OpenPage } from './openAttachment';
 export { setBrowserStartUrl } from './_browserStage';
 export { openFilesInTrashMode, setFilesDemoTree } from './_filesShared';
 export type { FilesDemoNode } from './_filesShared';

@@ -2,6 +2,439 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## 4.118.1
+
+- **Escape in a nested `PopupSubmenu` closes only the deepest level.** With a
+  submenu open inside another, one Escape closed both and sent focus to the
+  outermost row. Each open level registers an Escape interceptor, and the
+  interceptors are asked newest first — but React runs a parent's effects
+  after its children's, so once both levels had re-rendered the outer one was
+  the newest and took the key. An open level now declines Escape while a
+  deeper one is open under it, so Escape walks back one level at a time with
+  focus on the row that opened each, and the root menu closes only after the
+  last submenu has.
+
+## 4.118.0
+
+- **`PopupSubmenu` — a row in a `PopupMenu` that opens a nested menu.** Until
+  now the only submenu in the shell was the Start menu's, so a consumer that
+  needed one (the admin portal's Media right-click menu: "Set as cover image",
+  then "Move to" with a grouped list of targets) had to flatten the list or
+  build its own.
+
+  ```tsx
+  <PopupMenu portal style={{ left: x, top: y }} onClose={close}>
+    <PopupMenuItem onClick={setCover}>Set as cover image</PopupMenuItem>
+    <PopupSubmenu label="Move to">
+      <PopupMenuLabel>Gallery</PopupMenuLabel>
+      <PopupMenuItem onClick={() => move('hero')}>Hero</PopupMenuItem>
+      <PopupMenuDivider />
+      …
+    </PopupSubmenu>
+  </PopupMenu>
+  ```
+
+  It opens on hover after a short rest (120ms), and at once on click, Enter,
+  Space or ArrowRight — the keyboard ways also move focus to its first item,
+  and ArrowUp/ArrowDown/Home/End walk the items. ArrowLeft and Escape close it
+  and give focus back to the row; Escape goes through the interceptor seam, so
+  inside a shell window it closes the submenu and not the window. The row
+  carries `role="menuitem"`, `aria-haspopup="menu"`, `aria-expanded` and
+  `aria-controls`; the panel is `role="menu"`.
+
+  Placement is the Start menu's, from the same `menuPath.ts`: to the right of
+  the menu, flipped to the left when its measured width does not fit, top-
+  aligned with its row and moved up when it would run off the bottom. Open
+  submenus are one path for the whole menu with one close timer — the design
+  that fixed the Start menu's stale-timer bug — so sibling submenus are
+  exclusive and submenus nest to any depth.
+
+  A long submenu scrolls: `maxHeight` (a number of px or any CSS length, e.g.
+  `'min(60vh, 420px)'`) caps the panel, and it is never taller than the
+  viewport less its 8px gutters even when none is passed. A `disabled`
+  `PopupMenuItem` inside a submenu is skipped by the arrow keys, takes no
+  click, and leaves the menu open.
+
+  The panel is portalled to `<body>` and layered above the menu it came from.
+  A press inside it is not a click outside the menu. Choosing an item inside a
+  submenu closes the whole menu through the root `PopupMenu`'s `onClose`; items
+  in the root menu keep their contract, where the caller's `onClick` decides.
+
+  `PopupMenuProps`, `PopupMenuItemProps` and `PopupSubmenuProps` are now
+  exported as types.
+
+## 4.117.0
+
+- **`useSort` takes `options.columns` and ignores a saved sort the columns do
+  not offer.** The table makes a column sortable on `sortField ?? key`, and the
+  choice is saved per list. A save on a column since given `sortField: ''`, or
+  on a key whose column now sorts on another `sortField`, used to go out as
+  `?ordering=` on every open — DRF drops a term it cannot order by, so the list
+  came back unsorted for good. Given the same columns the table gets, `sort`
+  and `ordering` now fall back to the page default instead. The rule is the
+  table's own: `sortField ?? key`, never `_select`.
+
+  Backward compatible: without `columns` nothing is checked — and an EMPTY
+  array counts as not given, because a list page whose columns are not built
+  yet (permission-filtered, or keyed off a fetch) is not a table that offers no
+  sort. Read the other way it sent the page default on the first render and the
+  saved sort once the columns arrived: two requests per open, the first of them
+  sorted wrongly. `SortableColumn` is exported for callers that type the array
+  themselves; it is not `DataTable`'s column, which nests inside groups and
+  offers a sort on `sortable`.
+
+## 4.116.0
+
+- **`baseline()` keeps the history unless a record actually lands.** It used
+  to discard the stack on every call, and a form's hydration effect reaches it
+  on more edges than the load — most often the start of a background refetch,
+  where a once-per-id guard skips re-seeding and nothing on screen moves. The
+  app-wide polling and focus refetch made that a wipe every minute and on
+  every return from a spreadsheet, so Undo/Redo went grey a moment after a
+  bulk import with nothing saved (Purchase Invoice, then Goods Receipt and
+  Goods Issue by the same shape). Now the history goes only when a slice takes
+  a value while the baseline settles — a real seed, judged by content rather
+  than identity, so a line grid re-seeded from a refetch as a fresh array of
+  the same rows is the record coming round again and not a record landing —
+  and `clear()`, the after-save call, is its own operation that always
+  empties it.
+- **`baseline(key)` names the record.** A form that hydrates per id passes it,
+  and a switch to another record drops the history whether or not the new
+  values happen to equal the old — the case where nothing records, and an undo
+  would otherwise land on the wrong record. Pass it from the first load on (the
+  first named call has nothing to compare with, so it never clears by itself),
+  and pass `null` rather than `undefined` for a record with no id yet. A form
+  that relies on a bare `baseline()` to clear the history on a switch must pass
+  the key before it takes this version.
+- **A default set and baselined in the same mount effect is no longer a
+  step.** The lifting effect ran on mount and saw a suspension a child's effect
+  had just begun in that same commit; lifting it there let the child's own seed
+  record, so a new invoice opened with "Undo company" lit. The suspension now
+  lifts only in the commit its token arrives in.
+
+## 4.115.3
+
+- **A top-level nav row is hidden from a user who lacks its permissions.**
+  `navSections` takes plain `NavItem`s beside the sections, such as a portal's
+  Dashboard. The desktop Start menu (bottom, top and side taskbars) and the
+  sidebar drew those rows without reading their `perms` or `allPerms`, so a
+  gated row showed to everyone and its page refused on click. Only the mobile
+  sheet checked them. They now go through `navVisible`, and a top-level group
+  whose children are all hidden is dropped, the same as a group inside a
+  section.
+
+  The divider between the top-level rows and the sections is now drawn from
+  the filtered list too. Before, a menu whose only top-level row was hidden
+  still drew a rule with nothing above it.
+
+- **The sidebar filters the rows of a section that sets no `perms` of its
+  own.** It told a real section from a virtual one by checking
+  `'perms' in section`. For a section with no `perms` key that check is
+  false, so none of its rows were filtered. The customer portal's Help &
+  Feedback section sets no `perms`, so its gated Messages row was listed for
+  every user who had switched to the sidebar layout. The Start menu was not
+  affected.
+
+  A host that dropped gated top-level rows itself before passing
+  `navSections` in can stop doing so.
+
+## 4.115.2
+
+- **A grid cell no longer loses or reorders what is typed into it.** On a
+  React 19 host, typing `100` into an `EditableGrid` cell could be committed
+  as `001`, `01` or `1`. The supplier portal's production-progress form did
+  it at an ordinary typing pace. There were two causes:
+
+  - The keys after the first stay in the cell's DOM until the cell is left.
+    React 19 rewrites `dangerouslySetInnerHTML` whenever the prop object is
+    new (React 18 compared the `__html` string), and the grid built a new
+    object on every render. Any re-render while a cell was being typed into
+    wiped those keys and put the caret back at the start. Two things cause
+    such a re-render: a host form running a debounced check on the figures,
+    and `BulkImportGrid` adding rows once typing reaches its last two. The
+    object is now kept for as long as the cell's value stays the same, which
+    is what React 18 already checked.
+  - The first key opens the cell and commits itself, and the caret then has
+    to move past it. It used to move on the next animation frame, so a quick
+    second key could land in front of the first, and in a hidden tab the
+    caret never moved. It now moves in the same commit.
+
+  Spreadsheets 1.1.3 carries the fix. `npm run test:browser` also takes
+  `REACT_DIR` (a directory holding `react` and `react-dom`) to run the lane
+  on a consumer's React.
+
+## 4.115.1
+
+- **A timeline popover on the first day's mark is placed like any other.** The
+  first mark sits at x = 0, which is also the value the track holds while no
+  popover is open, so the effect that places the popover never ran for it. The
+  popover kept the stylesheet's position and its `translateX(-50%)` hung half
+  of it off the left edge — a Sales Order window showed "Order Placed" cut to
+  "der Placed". The placement now also re-runs when a different mark opens.
+- **A popover also keeps to the shell window that owns the timeline** (UI-11),
+  measured with `popupBounds`, 8 px from each edge, on top of the existing
+  clamp to the track. Its arrow still aims at the mark.
+- **Marks and `×N` folds no longer set a native `title`.** The popover already
+  shows the label and the date on hover and on focus, and the browser drew its
+  own tooltip with the same text beside it — a copy the page cannot place.
+  Screen readers keep the full `aria-label`.
+
+## 4.115.0
+
+- `react-os-shell/apps` gains **`openAttachment(att, openPage, opts?)`** and
+  **`attachmentKind(nameOrUrl)`**: a file opens in Preview (PDF, image, DXF,
+  3D) or Spreadsheet (CSV/TSV) instead of a browser tab. A binary workbook
+  stays a download — parsing untrusted bytes in the host's origin is not worth
+  a preview — and a type no viewer renders opens outside with a toast saying
+  why, rather than appearing to fail.
+- `opts.fetchBlob` is for a URL the page cannot fetch itself: a presigned or
+  CDN URL is cross-origin to the host, so the viewer's own fetch fails even
+  though the URL opens fine in a tab. The window then opens on a placeholder
+  (`opts.loadingMessage`) and the bytes are swapped in when they land; a
+  rejection ends as that Error's message in the same window.
+- Lifted from the admin portal, which had carried this decision table since
+  September; the other three portals need it for their attachments, and a
+  fourth copy of a classification this specific is what drifts.
+
+## 4.114.0
+
+- **`installStaleChunkReload()` — a tab that outlived a deploy reloads instead
+  of crashing.** A Vite build names every lazy chunk by its content hash, and a
+  deploy replaces the whole `assets/` directory. A tab opened before the deploy
+  still runs the old entry, and the first lazy window it opens asks for a chunk
+  the server no longer has: the SPA fallback answers with `index.html`, the
+  browser refuses that as a module, and the window crashes with "Failed to
+  fetch dynamically imported module". Nothing inside the page can satisfy that
+  import — only a fresh document, which names the new chunks, can.
+
+  Vite dispatches `vite:preloadError` on `window` for exactly this failure.
+  The installer listens for it, swallows the throw and reloads the page — once
+  per 30-second cooldown, remembered in `sessionStorage` so it survives the
+  reload it guards. A chunk that is STILL missing after the reload (a broken
+  deploy, an offline network) is let through to the boundary, so a real
+  outage is a visible crash and not a reload loop that eats the user's open
+  windows. Call it once in `main.tsx`, before the app mounts; it takes
+  `cooldownMs`, `reload`, `storage` and `now` for a host that needs to test it.
+
+- **`AppUpdateBanner` and `useAppUpdate` — "A new version is available"
+  without a service worker.** The other half of the same problem: a tab left
+  open all day keeps running the bundle it loaded, fixes land silently hours
+  late, and people report bugs that are already fixed. The hook polls the
+  `version.json` a build emits beside its bundle — a fetch a minute from a
+  visible tab, none from a hidden one, and one more the moment a hidden tab is
+  shown again, since the tab that sat in the background all afternoon is the
+  one that missed the deploy — and reports the deployed version once it
+  differs from `currentVersion`. Polling stops once an update is known.
+
+  The banner renders nothing until then, and then a warning `Banner` pinned at
+  the top centre of the viewport above every window: the catalog's
+  `update.available` line, both versions (`2.27.0 → 3.0.0`), and a primary
+  "Refresh now" that reloads (or calls `onRefresh`). `versionUrl`, `pollMs`
+  and `message` are props. Both are kit exports, so a `react-os-shell/ui`
+  consumer with its own routed pages gets them too. Two new strings in the
+  catalog: `update.available`, `update.refreshNow`.
+
+- **`WindowCrashedFallback` offers "Reload page" for a missing chunk.** Its
+  "Reload window" resets the boundary and remounts the content — which, for a
+  chunk the server no longer serves, re-imports the same missing file and
+  crashes again. For that error (`isStaleChunkError`, exported) the fallback
+  now explains that a new version was deployed while the tab was open and
+  offers a document reload, the one recovery that works. Every other crash is
+  unchanged.
+
+## 4.113.0
+
+- **`ProductionTimeline` takes `variant="rail"`.** The bar alone, for a
+  window whose own header already says what the order is: no card, no
+  heading, no lead-time line, no label under the active report — every
+  report, shipment, inspection and invoice is a dot with a popover — the thumb
+  with its date chip, `Start` and `Est. done` flanking the rail, the estimated
+  completion as a hollow mark on the right edge while it is still ahead, and
+  under the rail one row: Play, the return button when the thumb has been
+  moved, and the `<report> · date · N% overall · N pc in stock` line. The rail
+  keeps the 48 px floor between reports without cutting anything (the track's
+  `spread` axis), so two reports a week apart on a twenty-month window are two
+  dots rather than a `×2`. The card variant is unchanged.
+
+- **`onPlayStart`** fires before the thumb moves, on a fresh run and on a
+  resume, so a window that keeps the bar in view while its table shows
+  something else can switch the table first — the customer order window flips
+  from prices to production stages here, and Play is one press wherever the
+  reader was.
+
+- **Invoices on the bar.** `TimelineMarkerKind` (and `TimelineTrackKind`)
+  gain `'invoice'`: an accent disc with a new `receipt` glyph, legended as
+  "Invoice" on the card, beside the shipments and inspections. A
+  `MilestoneTimeline` may use the kind too.
+
+- **`TimelineTrack` takes `endMark`** — a hollow, dashed mark ON a bare
+  rail's right edge for a day the window already runs to (an estimate, a
+  contractual date), with the label and the date in its popover. The undated
+  cap past the axis is unchanged.
+
+## 4.112.0
+
+- **`MilestoneTimeline` takes `variant="rail"`.** The bar alone, for a window
+  whose stepper already names the stages: no card, no heading, no label under
+  any dot. Every milestone is a dot with a popover (the label and date moved
+  there, not away), a revision carries a two-character `caption` over its dot
+  (`v3`; captions that would overprint collapse to `v1–v4`), the edge captions
+  flank the rail on its own row (`edgeCaptions={{ start: 'Start', end:
+  'Ready' }}`), and what has not happened is one dashed cap at the end of a
+  dashed tail — a real button, announced as the last undated milestone and
+  naming the rest in its popover — instead of a "Not yet reached" column.
+  The card variant is unchanged.
+
+  The rail's axis is the new **`spread`** mode on `TimelineTrack`: nothing is
+  cut, so there is no break glyph and no "282 days" it would have said; every
+  stretch between two dated marks is held to at least 48 px and the idle
+  stretches pay for it in proportion. A ten-month wait is still the longest
+  thing on the bar, just not 84% of it.
+
+- **The stepper and the rail point at each other.** `highlightKeys` lights one
+  soft band from the leftmost named milestone to the rightmost and every dot
+  inside it (a single key is a ring around one dot; the cap answers to the
+  pending milestone's key), and `onHoverChange` reports the milestone under
+  the pointer or the focus, `null` on leave. A consumer hovering "Design for
+  Manufacturing" above the bar can light DFM v1 through DFM Confirmed, and
+  hovering DFM v3 on the bar can light the step.
+
+- **A milestone can be `provisional`.** Placed on the best date the record
+  holds for something that has not happened — a sample ORDERED on a day,
+  drawn where the shipment will be — it is hollow, it is never "where we are",
+  and the fill stops before it. The mould card used to draw a filled truck on
+  the first sample order's date while the stepper above it said the sample
+  had not shipped; now the two agree.
+
+## 4.111.0
+
+- **Both timelines are one colour now, and it is the theme's own.** `TimelineTrack` —
+  and through it `MilestoneTimeline` and `ProductionTimeline` — used to mix three
+  blues that were each nearly right and none of them the accent: the `blue-500`
+  utilities on the rail fill and the accent marks, `--status-active-solid`
+  (`#1d4ed8`) behind every kind token, and `text-blue-600` on the thumb and the
+  cluster pills. No accent theme remaps the status tier, so a portal with a custom
+  accent got a bar in stock blue beside buttons in its own colour.
+
+  Every one of them reads `--tl-accent` now, which is
+  `var(--accent-600, var(--color-blue-600, #2563eb))` — the 600 step the primary
+  `Button` wears, the step a link wears, the step an active tab underlines with.
+  The middle link of that chain is Tailwind v4's own variable rather than a hex,
+  so with no custom accent a mark and a primary `Button` are literally the same
+  computed value: v4 states its palette in OKLCH and `blue-600` renders
+  `rgb(21 93 252)`, not the `#2563eb` that v3 spelled. There is no dark step,
+  because `.bg-blue-600` has none either.
+
+  A completion loses its green with the rest. The CHECK GLYPH is what says it
+  finished, and a shape survives a greyscale print and a colour-blind reader in a
+  way a second hue never did — the same argument that retired the five bespoke kind
+  hues.
+
+- **A mark takes its colour from the token, not from a utility class, and that is
+  a bug fix.** `.rosh-tl-node` declares `background: none` and `border: 0`, and
+  `ui.css` is UNLAYERED while Tailwind's utilities live in `@layer utilities` — an
+  unlayered declaration beats a layered one whatever the specificity. So the base
+  rule won: the "you are here" mark rendered as a TRANSPARENT disc and a default
+  dot as a BLACK ring, in every consumer, from the day the bar shipped. It only
+  looked right under a custom accent, where `themes.css` remaps the same classes
+  with `!important`. An inline `var(--tl-*)` — the route the kind marks already
+  took — outranks all of it whatever a consumer's layer order.
+
+- **Flat.** The rail fill's white gloss gradient is gone, and so are the three drop
+  shadows: the reveal chip's, the bubble and popover's two-layer one, and the
+  scrubber thumb's. Each keeps the border or the flat ring that was underneath it.
+  What remains are `0 0 0 Npx` RINGS — a halo in the card's own ground, a focus
+  ring, the accent wash — which is a flat colour at a radius rather than a shadow.
+  Nothing else in the kit wears a gradient fill and `StatusBadge` wears no shadow
+  at all, which is the consistency this was missing.
+
+- **`--tl-accent` is new and the other `--tl-*` tokens alias it**, so a consumer
+  retuning one kind still has a name to reach for. `--tl-on-kind` is
+  `var(--on-accent, #ffffff)` and `--tl-soft` mixes the accent down to 16% rather
+  than naming a status wash. `[data-custom-accent]` also remaps
+  `hover:text-blue-600` and `hover:border-blue-600` now: a control whose resting
+  state followed the user's accent used to snap back to literal blue under the
+  pointer.
+
+  Behaviour is unchanged — playback, glide, `onProgress`, clustering, compressed
+  cuts, previews, the start anchor and the reduced-motion path all render exactly
+  as before — and no prop was added, removed or retyped.
+
+- **A mark on a scrubber can be hovered, focused and clicked again — it could not
+  before, on any track with a `thumb`.** `ThumbLayer` draws a 24 px
+  `.rosh-tl-hit` strip over the rail so a 6 px line can be pressed by a hand. It
+  is rendered AFTER the list of dots and neither declared a `z-index`, so the
+  strip won the paint order and took every pointer event aimed at a mark. The
+  hover popover, the drawn caption, `onClick`, `onActivate` and the bubble's
+  "Open" were all wired and all unreachable, on every `ProductionTimeline` since
+  the scrubber shipped. `MilestoneTimeline` was never affected — it has no thumb,
+  which is why the mould card's popover worked and the production one never did.
+
+  The fix is one declaration, and it is on the MARKS rather than on the strip:
+  `.rosh-tl-nodes .rosh-tl-node { z-index: 4 }` lifts them over the strip and
+  leaves them under the thumb (5) and the popover (6). So the strip keeps every
+  pixel no dot is standing on — a press on the bare rail still starts a drag, and
+  because the gesture holds pointer capture, a drag crossing a mark is not handed
+  away to it — a press on a dot activates that dot and starts no drag, and the tab
+  order is untouched, because it is the DOM's and nothing moved in the DOM.
+
+  No jsdom spec could have caught this and none did: jsdom has no layout and no
+  hit testing, so a spec that dispatches `mouseover` at a button passes however
+  the stage is stacked. The claim is asserted in the browser lane
+  (`tests/browser/timelineScrubberHits`), with a real pointer and one
+  `document.elementFromPoint`.
+
+- **No two marks are drawn on top of each other any more.** "Marks that are too
+  close overlap each other" (Henry, 2026-09-15, translated, looking at a
+  customer's order with two shipments a few days apart). A mark is 14–16 px
+  across, a day on a ten-week window is ten: the second shipment was printed over
+  the first, where it could not be hovered, read or counted — and so was every
+  same-day milestone on every mould card, three of them on 001F/1813 alone.
+
+  A run of marks whose centres are closer than one mark's width now folds into
+  ONE mark carrying `×N` — its kind's own shape and glyph where the run shares a
+  kind (a shipment diamond with a truck and a `×2`), a neutral `×N` pill where it
+  does not, and either way an accessible name that lists every member with its
+  date. It is a different collision from the `DFM ×N` LABEL pill, which asks
+  whether two labels clear each other and folds only iterations of one kind;
+  `clusterOverlaps` asks whether the two DOTS clear each other, where the kinds
+  have stopped mattering. Both are unchanged in what they already did.
+
+  A pointer opens a fold: the axis magnifies around the run — the same
+  magnification a `×N` pill asks for — and each member is a mark of its own again,
+  with its own popover and its own Open. A run that is all one DATE cannot be
+  opened, because no magnification separates a coordinate from itself, so its
+  popover lists every member with its date and with the preview that member would
+  have shown alone. Keyboard focus never opens a fold (the button would unmount
+  under the focus it was given); it gets that list, and Enter opens the run and
+  moves the focus to its first member.
+
+  Folding is a DRAWING decision and nothing else: the scrubber's stops,
+  `onActivate`, `aria-valuemax`, playback and the fill are all still computed from
+  every mark, so a report inside a fold is still a rung the thumb rests on and
+  still activates when it is picked.
+
+- **A shipment looks like a shipment.** `KIND_STYLES.shipment` had no glyph, and
+  once every kind was painted in the one accent the diamond was an accent lozenge
+  among accent discs with nothing to tell them apart — on a scrubber it is not
+  captioned either, unless the pointer is resting on it. It now carries a `truck`
+  glyph, white on the accent like the inspection's flask, on the rail and in the
+  legend chip alike. `TimelineGlyph` gains `'truck'`, and a `TimelineMarker` may
+  name its own `glyph` where its kind's is not specific enough — a container
+  leaving the factory and a courier bag of samples are both shipments.
+
+- **`ProductionTimeline` takes `reportLabel` and `resetLabel`.** The card printed
+  `report.progress_number` in six places — the caption over the thumb, the popover
+  header, each dot's accessible name and `title`, the slider's `aria-valuetext`
+  and the "Showing …" line — and a portal had no way to say otherwise. A
+  production-progress report is an internal document with an identity of its own,
+  and a customer's order window should not be printing it.
+
+  `reportLabel: (report) => string` defaults to `report.progress_number`, so the
+  admin window is unchanged to the character; `resetLabel` replaces the whole of
+  the `Back to …` button, which is the one place the identity is not a mark on the
+  bar. Nothing else about the card moved.
+
 ## 4.110.0
 
 - **Every timeline colour resolves to a token the kit already owns.** `--tl-dfm`,

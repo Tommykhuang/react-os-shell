@@ -108,11 +108,24 @@ export default async function check(page, { pageErrors, open }) {
   const pill = page.locator('[data-testid="mould"] [data-timeline-part="cluster"]');
   assert.equal(await pill.count(), 1);
   assert.match(await pill.innerText(), /DFM ×4/);
-  // And they are still four dots on the rail at their own dates.
+  // And they are still on the rail at their own dates — the two that have a date
+  // to themselves as their own dots, and the three that share 7 November as one
+  // fold, because three dots on one coordinate is one dot and two nobody can
+  // see. (This asserted seven separate dots until 2026-09-15, which is exactly
+  // the overlap Henry reported.)
   assert.equal(
-    await page.locator('[data-testid="mould"] [data-timeline-node="item"]').count(), 7,
+    await page.locator('[data-testid="mould"] [data-timeline-node="item"]').count(), 4,
     'the pill stands for the revisions without removing them',
   );
+  const sameDay = page.locator('[data-testid="mould"] [data-timeline-node="fold"]');
+  assert.equal(await sameDay.count(), 1, 'the three milestones on 7 November are one fold');
+  assert.equal(await sameDay.getAttribute('data-timeline-count'), '3');
+  for (const label of ['DFM v3', 'DFM v4', 'DFM Confirmed']) {
+    assert.ok(
+      (await sameDay.getAttribute('aria-label')).includes(label),
+      `the fold does not name ${label}`,
+    );
+  }
 
   // A phase bracket is a box with a border and no text, so "it rendered" is a
   // claim about geometry — and it shipped once as a `div` with no rule at all,
@@ -311,10 +324,15 @@ export default async function check(page, { pageErrors, open }) {
   await page.waitForTimeout(320);
 
   // ── Preview: the popover survives the trip from the dot into it ───────────
-  const dfmok = page.locator('[data-testid="mould"] [aria-label^="DFM Confirmed"]');
-  await dfmok.hover();
+  // Through the FOLD, because DFM Confirmed shares 7 November with two drawings:
+  // three dots on one coordinate are one dot, and no magnification separates a
+  // coordinate from itself — so the fold's popover is where those three live,
+  // each with the card it would have shown on its own.
+  const sameDayFold = page.locator('[data-testid="mould"] [data-timeline-node="fold"]');
+  await sameDayFold.hover();
   const bubble = page.locator('[data-timeline-part="tooltip"]');
   await bubble.waitFor();
+  assert.match(await bubble.innerText(), /DFM Confirmed/);
   assert.match(await bubble.innerText(), /3D model approved/);
   const bubbleBox = await bubble.boundingBox();
   await page.mouse.move(bubbleBox.x + bubbleBox.width / 2, bubbleBox.y + bubbleBox.height / 2, { steps: 8 });
@@ -445,19 +463,22 @@ export default async function check(page, { pageErrors, open }) {
   // ── The palette, and the start anchor, in a browser that resolves them ────
   //
   // "The timeline's colors must be the ROS defaults, not hard-coded" and
-  // "inspection must not be red" (Henry, 2026-09-14). jsdom computes no custom
-  // property, so the suite's static specs can only read the stylesheet; here
-  // the chip has a colour, and it is the one the token tier hands it.
+  // "inspection must not be red" (Henry, 2026-09-14), and then, the same day:
+  // "the timeline's blue is not our theme blue; it must be the theme colour".
+  // The tier the kinds used to read — `--status-active-*` — was neither
+  // hard-coded nor red, and was still the wrong blue, because no accent theme
+  // remaps it. They read `--tl-accent` now, which is the theme's own 600 step.
+  // jsdom computes no custom property, so the suite's static specs can only
+  // read the stylesheet; here the chip has a colour.
   for (const theme of ['light', 'dark']) {
     await open(`?width=720${theme === 'dark' ? '&theme=dark' : ''}`);
     await page.locator('[data-testid="production"] [data-timeline-part="fill"]').waitFor();
 
-    // The tier a kind is supposed to read, resolved by the browser through a
-    // probe rather than restated here as a hex the spec could drift from.
-    const tier = theme === 'dark' ? '--status-active-soft-ink' : '--status-active-solid';
-    const seen = await page.evaluate(({ tier }) => {
+    // The token the kinds are supposed to read, resolved by the browser through
+    // a probe rather than restated here as a hex the spec could drift from.
+    const seen = await page.evaluate(() => {
       const probe = document.createElement('span');
-      probe.style.color = `var(${tier})`;
+      probe.style.color = 'var(--tl-accent)';
       document.body.appendChild(probe);
       const accent = getComputedStyle(probe).color;
       probe.remove();
@@ -471,11 +492,11 @@ export default async function check(page, { pageErrors, open }) {
         shipment: getComputedStyle(diamond).backgroundColor,
         inspection: getComputedStyle(disc).backgroundColor,
       };
-    }, { tier });
+    });
 
     assert.equal(seen.inspection, seen.accent,
-      `${theme}: the inspection chip is ${seen.inspection}, not the kit's ${tier} (${seen.accent})`);
-    assert.equal(seen.shipment, seen.accent, `${theme}: the shipment chip drifted from the same tier`);
+      `${theme}: the inspection chip is ${seen.inspection}, not the theme accent (${seen.accent})`);
+    assert.equal(seen.shipment, seen.accent, `${theme}: the shipment chip drifted from the accent`);
     // And measured, not merely named: nothing on this bar is a red, an orange
     // or an amber. 0-65 degrees of hue is that whole range.
     const [r, g, b] = seen.inspection.match(/[\d.]+/g).slice(0, 3).map(Number);

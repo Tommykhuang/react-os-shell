@@ -7,6 +7,7 @@ import {
   undoReducer,
   emptyUndoState,
   matchUndoHotkey,
+  sameValue,
   type UndoSnapshot,
   type UndoHotkeyEvent,
 } from '../hooks/undoHistory';
@@ -178,9 +179,20 @@ export function UndoProvider({ children, canEdit = true, perms, windowId }: Undo
   // rate is a sound tell. Trip once, say which slice and why, and stop
   // recording — a dead undo stack and a console error can be diagnosed.
   const runaway = useRef({ last: 0, count: 0, tripped: false });
+  // Set by a `baseline()` / `clear()` — see them below `record`.
+  const seeded = useRef(false);
 
-  const record = useCallback((label: string, coalesceKey: string | null) => {
-    if (!enabled || suspended.current || pending.current) return;
+  const record = useCallback((label: string, coalesceKey: string | null, change?: { prev: unknown; next: unknown }) => {
+    // A change landing while a `baseline()` settles is the seed it was called
+    // for — noted, not recorded, and it is what decides whether the history
+    // goes (see the lifting effect below). By content, not identity: a line
+    // grid re-seeded from a refetch is a fresh array of the same rows, and
+    // that is the record coming round again, not a record landing.
+    if (suspended.current) {
+      if (!change || !sameValue(change.prev, change.next)) seeded.current = true;
+      return;
+    }
+    if (!enabled || pending.current) return;
     const r = runaway.current;
     if (r.tripped) return;
     const now = Date.now();
@@ -262,26 +274,65 @@ export function UndoProvider({ children, canEdit = true, perms, windowId }: Undo
    * does, and would leave the load recorded.
    */
   const [baselineToken, setBaselineToken] = useState(0);
-
-  const baseline = useCallback(() => {
+  const tokenCounter = useRef(0);
+  // The token the current suspension is waiting on. The lifting effect runs
+  // on mount too, and on a mount it sees a suspension a child's effect began
+  // in that same commit — lifting it there would put the child's own seed
+  // (`setCompany(default); baseline()`) back into the history as a step, which
+  // is exactly the "Undo company" a form opened with. So it lifts only in the
+  // commit the token it was given arrives in, which is the one after.
+  const suspendUntil = useRef(0);
+  const forceClear = useRef(false);
+  const suspend = useCallback(() => {
     suspended.current = true;
+    seeded.current = false;
     pending.current = null;
-    setBaselineToken(t => t + 1);
-    dispatch({ type: 'clear' });
+    tokenCounter.current += 1;
+    suspendUntil.current = tokenCounter.current;
+    setBaselineToken(tokenCounter.current);
   }, []);
+  // The record the last baseline() named, when the caller names one. A
+  // different key is a switch to another record: whatever lands, the history
+  // belongs to the record that is going away and must not follow the user onto
+  // the new one — which is exactly what would happen if the new record's
+  // values equalled the old, since then nothing records and `seeded` stays
+  // false. A refetch of the same record passes the same key and gets the
+  // ordinary rule.
+  const baselineKey = useRef<string | number | null | undefined>(undefined);
+  const baseline = useCallback((key?: string | number | null) => {
+    if (key !== undefined) {
+      if (baselineKey.current !== undefined && key !== baselineKey.current) forceClear.current = true;
+      baselineKey.current = key;
+    }
+    suspend();
+  }, [suspend]);
 
   useEffect(() => {
-    if (!suspended.current) return;
+    if (!suspended.current || baselineToken !== suspendUntil.current) return;
     suspended.current = false;
     pending.current = null;
-    dispatch({ type: 'clear' });
+    // The history goes only when a record actually landed — a seed the slices
+    // took while suspended — or the caller asked for it outright (`clear()`).
+    // A `baseline()` with nothing arriving behind it is what the start of a
+    // background refetch looks like from a form that keeps its once-per-id
+    // guard: the values on screen are still the user's edits, and wiping the
+    // history there is what greyed Undo/Redo out a moment after a bulk import
+    // with nothing saved.
+    if (seeded.current || forceClear.current) dispatch({ type: 'clear' });
+    seeded.current = false;
+    forceClear.current = false;
   }, [baselineToken]);
 
-  // Same operation, named for the other end of the edit. Kept distinct at the
-  // call site because "clear on save" and "baseline on load" are different
-  // facts about the form, and a reader of either line should not have to work
-  // out which one was meant.
-  const clear = baseline;
+  // The other end of the edit: after a save, "earlier" is on the server and
+  // the history goes whether or not anything on screen moved. Kept distinct
+  // at the call site because "clear on save" and "baseline on load" are
+  // different facts about the form, and a reader of either line should not
+  // have to work out which one was meant.
+  const clear = useCallback(() => {
+    forceClear.current = true;
+    dispatch({ type: 'clear' });
+    suspend();
+  }, [suspend]);
 
   const canUndo = enabled && state.past.length > 0;
   const canRedo = enabled && state.future.length > 0;
@@ -361,8 +412,22 @@ export interface UndoControlsApi {
    * Worth calling on every arrival, not just the first: a window kept open
    * across a refetch, or one whose entity changes underneath it, wants the
    * same treatment, and the call is idempotent for a form nobody has touched.
+   *
+   * A history is only ever dropped when a record actually lands (a slice takes
+   * a value while the baseline settles); a call on a refetch edge where the
+   * form's guard re-seeds nothing leaves the user's edits undoable. Name the
+   * record — `baseline(id)` — and a switch to another record drops the history
+   * even when the new record's values happen to equal the old, so an undo can
+   * never land on the wrong record.
+   *
+   * Name it from the first load on. The first named call has no earlier name
+   * to compare with, so it never drops the history by itself: a switch away
+   * from a record that was baselined bare keeps its history. And a record with
+   * no id yet passes `null`, not `undefined` — `baseline(undefined)` is a bare
+   * call, so `baseline(record?.id)` loses the switch guard on a create route;
+   * write `baseline(record?.id ?? null)`.
    */
-  baseline: () => void;
+  baseline: (key?: string | number | null) => void;
   /** False when the user may not edit this record, so custom UI can hide
    *  itself the way `UndoControls` does. */
   enabled: boolean;
@@ -488,7 +553,7 @@ export function useUndoable<T>(value: T, apply: (next: T) => void, opts: Undoabl
     if (Object.is(value, last.current)) return;
     // Record before moving `last`: the snapshot the provider takes reads this
     // slice through `getLast`, and must see the value from before the change.
-    c.record(optsRef.current.label, optsRef.current.coalesceKey);
+    c.record(optsRef.current.label, optsRef.current.coalesceKey, { prev: last.current, next: value });
     last.current = value;
   }, [value]);
 }
