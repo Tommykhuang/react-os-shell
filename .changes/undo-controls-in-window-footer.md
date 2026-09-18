@@ -16,7 +16,12 @@ title: Undo/Redo is shown by the window footer, not mounted by each form
   with nothing to take back shows no dead pair, a dialog a form opens gets
   none in its own footer, and the mobile chrome, which hides the footer, gets
   nothing mounted into it. A provider nested inside a window portals its own
-  pair through `ModalActions` the same way. A form that still mounts its own
+  pair through `ModalActions` on the same footer terms — it joins a footer
+  that is there for other reasons, never creates one or holds it open, and
+  shows nothing on the mobile chrome — but its own `canEdit` takes the place
+  of the editing check: the form that nested it has already said whether the
+  record may be edited, so pass `canEdit={isEditing}` (or the lock) rather than
+  leaving it at the default. A form that still mounts its own
   `UndoControls` keeps it where it put it — an inline pair in a plain overlay
   stays inline — and the shell mounts nothing for that stack, so it shows one
   pair, not two (`UndoControlsProps.auto` marks the shell's; a

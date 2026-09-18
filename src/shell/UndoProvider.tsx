@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useId, useMemo, useReducer, useRef, useState } from 'react';
-import { ModalActions, useEnclosingModalId, useIsActiveWindow } from './Modal';
+import { ModalActions, useEnclosingModalId, useIsActiveWindow, useModalFooterOpen } from './Modal';
 import UndoControls from './UndoControls';
 import { UndoContext, type UndoContextValue, type UndoSlice as Slice } from './undoContext';
 import { useShellAuth } from './ShellAuth';
@@ -376,12 +376,23 @@ export function UndoProvider({ children, canEdit = true, perms, windowId }: Undo
   // through `ModalActions` like any other footer action, here. The one
   // `WindowManager` mounts sits ABOVE the `<Modal>` and has no footer to reach,
   // so there the Modal reads this context and renders the pair itself.
+  //
+  // A nested pair follows the same footer terms as the window's: it joins a
+  // footer that is there for other reasons and never creates one, and the
+  // mobile chrome, which hides the footer, gets nothing (`useModalFooterOpen`
+  // answers both, and the portal is `quiet`, so the pair is never itself the
+  // reason the bar shows). What stands in for the window's editing check is
+  // this provider's own `canEdit`: the form that nested it has already said
+  // whether the record may be edited, which is exactly the fact the provider
+  // `WindowManager` mounts cannot know — and a dialog, which has no editing
+  // state of its own, would otherwise lose its pair.
   const insideModal = useEnclosingModalId() !== '';
-  const showsOwnControls = insideModal && enabled && hasState && !handMounted;
+  const footerOpen = useModalFooterOpen();
+  const showsOwnControls = insideModal && enabled && hasState && !handMounted && footerOpen;
 
   return (
     <UndoContext.Provider value={value}>
-      {showsOwnControls && <ModalActions position="left"><UndoControls auto /></ModalActions>}
+      {showsOwnControls && <ModalActions position="left" quiet><UndoControls auto /></ModalActions>}
       {children}
     </UndoContext.Provider>
   );

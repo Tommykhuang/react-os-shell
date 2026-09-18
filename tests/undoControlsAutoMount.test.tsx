@@ -24,7 +24,8 @@ import { setShellWindowRegistry } from '../src/windowRegistry/types';
 const ENTITY_TYPE = 'undo-auto-entity';
 
 type Variant = 'form' | 'no-state' | 'own-mount' | 'read-only' | 'nested-provider' | 'child-dialog'
-  | 'no-footer' | 'nested-read-only' | 'view-mode' | 'declared' | 'nested-editable-own-mount';
+  | 'no-footer' | 'nested-read-only' | 'view-mode' | 'declared' | 'nested-editable-own-mount'
+  | 'nested-no-footer' | 'nested-save-leaves' | 'nested-view-mode';
 let variant: Variant = 'form';
 
 /** One undoable field and a button that changes it — the smallest form. */
@@ -84,6 +85,19 @@ function EditableSampleForm() {
   );
 }
 
+/** A nested provider whose footer is opened only by a Save button that can
+ *  go away — the pair must not be what keeps the footer bar showing. */
+function NestedSaveThatLeaves() {
+  const [showSave, setShowSave] = useState(true);
+  return (
+    <UndoProvider canEdit>
+      <Field />
+      {showSave && <Save />}
+      <button type="button" data-testid="drop-save" onClick={() => setShowSave(false)}>Drop Save</button>
+    </UndoProvider>
+  );
+}
+
 function ChildDialog() {
   const [open, setOpen] = useState(true);
   return (
@@ -118,6 +132,9 @@ function Body({ editing, setEditing }: { editing: boolean; setEditing: (v: boole
     );
     case 'declared': return <><DeclaredField /><Save /></>;
     case 'nested-editable-own-mount': return <EditableSampleForm />;
+    case 'nested-no-footer': return <UndoProvider canEdit><Field /></UndoProvider>;
+    case 'nested-save-leaves': return <NestedSaveThatLeaves />;
+    case 'nested-view-mode': return <UndoProvider canEdit><Field /><Save /></UndoProvider>;
   }
 }
 
@@ -140,7 +157,7 @@ function Opener({ id }: { id: string }) {
 
 /** A saved record opens in view mode; everything else is a draft (`new-`),
  *  which WindowManager treats as an editing state. */
-const SAVED: Variant[] = ['view-mode', 'declared'];
+const SAVED: Variant[] = ['view-mode', 'declared', 'nested-view-mode'];
 
 async function openWindow(v: Variant) {
   variant = v;
@@ -172,6 +189,9 @@ async function openWindow(v: Variant) {
 const pairs = (root: ParentNode) => root.querySelectorAll<HTMLElement>('[data-undo-controls]');
 const undoButton = (root: ParentNode) =>
   root.querySelector<HTMLButtonElement>('[data-undo-controls] button:first-child')!;
+/** The window's footer bar: the element both action slots sit in. */
+const footerOf = (root: ParentNode) =>
+  root.querySelector<HTMLElement>('[data-modal-actions-left]')!.parentElement!.parentElement!;
 const click = (el: HTMLElement | null, what: string) => {
   assert.ok(el, `${what} exists`);
   act(() => { el!.click(); });
@@ -308,4 +328,50 @@ test('a dialog the form opens does not grow a second pair in its own footer', as
   assert.notEqual(dialogPanel, panel(), 'the dialog is its own panel');
   assert.equal(pairs(dialogPanel).length, 0, 'no controls in the dialog footer');
   assert.equal(pairs(panel()).length, 1, 'the window keeps its one pair');
+});
+
+test('a provider nested in a window with no footer of its own does not grow one for its pair', async (t) => {
+  const { mounted, panel } = await openWindow('nested-no-footer');
+  t.after(() => mounted.unmount());
+  assert.ok(panel().querySelector('[data-testid="value"]'), 'the field rendered');
+  assert.equal(pairs(panel()).length, 0, 'no footer to join, so no pair');
+  assert.ok(footerOf(panel()).classList.contains('hidden'), 'and the footer bar stays hidden');
+});
+
+test('the nested pair leaves with the footer: it never holds the bar open on its own', async (t) => {
+  const { mounted, panel } = await openWindow('nested-save-leaves');
+  t.after(() => mounted.unmount());
+  assert.equal(pairs(panel()).length, 1, 'the pair joins the footer the Save button opened');
+  assert.equal(footerOf(panel()).classList.contains('hidden'), false, 'the bar is showing');
+
+  click(panel().querySelector('[data-testid="drop-save"]'), 'the Drop Save button');
+  await flush();
+  await flush();
+  assert.equal(pairs(panel()).length, 0, 'with the Save gone the pair goes too');
+  assert.ok(footerOf(panel()).classList.contains('hidden'), 'and the footer bar hides again');
+});
+
+test('on the mobile chrome a nested provider mounts nothing either', async (t) => {
+  const real = window.matchMedia;
+  const mobile = (query: string) => ({ ...real(query), matches: true });
+  (window as unknown as { matchMedia: unknown }).matchMedia = mobile;
+  (globalThis as unknown as { matchMedia: unknown }).matchMedia = mobile;
+  t.after(() => {
+    (window as unknown as { matchMedia: unknown }).matchMedia = real;
+    (globalThis as unknown as { matchMedia: unknown }).matchMedia = real;
+  });
+
+  const { mounted, panel } = await openWindow('nested-provider');
+  t.after(() => mounted.unmount());
+  assert.ok(panel().querySelector('[data-testid="value"]'), 'the field rendered');
+  assert.equal(pairs(panel()).length, 0, 'the footer is hidden on mobile, so the nested pair is not mounted into it');
+});
+
+test("a nested provider's own canEdit is its claim: a saved record in view mode still gets its pair", async (t) => {
+  const { mounted, panel } = await openWindow('nested-view-mode');
+  t.after(() => mounted.unmount());
+  const pair = pairs(panel());
+  assert.equal(pair.length, 1, 'the form nested the provider and said canEdit, so the pair shows');
+  assert.equal(pair[0].dataset.undoControls, 'shell');
+  assert.ok(pair[0].closest('[data-modal-actions-left]'), 'in the footer, through ModalActions');
 });
