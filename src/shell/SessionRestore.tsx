@@ -18,7 +18,8 @@
  *    a stale session on top of it.
  *  - Persisting starts only after the restore attempt, and writes only when
  *    the open windows differ from the saved set — the set the restore read,
- *    then the set last written. So a mount, replayed or not, writes nothing
+ *    then the set last written that SETTLED (a save the adapter rejects does
+ *    not count, so the next change retries). So a mount, replayed or not, writes nothing
  *    until the user opens or closes a window, and a consumer's adapter
  *    re-rendering (a new `save` each render) writes nothing either.
  *    Saves are debounced — opening five windows writes once.
@@ -80,6 +81,14 @@ export default function SessionWindowRestore() {
   // The set the prefs hold, as far as this mount knows: what the restore
   // read, then what was last written.
   const savedRef = useRef<SessionWindowRef[]>([]);
+  // The refs of the write currently in flight, if any. Without this, a write
+  // that has been fired but not yet settled compares different on every render
+  // in between, and an adapter that hands over a new `save` each render (all
+  // three EFFICIENT portals) would fire a second write for the same set.
+  const pendingRef = useRef<SessionWindowRef[] | null>(null);
+  // Identifies the most recent write, so one that settles late cannot move
+  // `savedRef` back behind a newer one.
+  const writeSeq = useRef(0);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // ── Restore, once, at mount ──
@@ -107,9 +116,33 @@ export default function SessionWindowRestore() {
     // the set it never saw. It runs after the clear, so a window opened and
     // closed again inside the debounce cancels its own pending write.
     if (sameSessionRefs(refs, savedRef.current)) return;
+    // Already on its way. Re-arming here is what would write it twice.
+    if (pendingRef.current && sameSessionRefs(refs, pendingRef.current)) return;
     saveTimer.current = setTimeout(() => {
-      savedRef.current = refs;
-      save({ session_windows: refs });
+      // Advance the saved set when the write SETTLES, not when it is fired. A
+      // rejected save must leave `savedRef` on the old set, so the next change
+      // still compares different and writes the whole list again rather than
+      // the shell believing a lost write landed and never retrying.
+      //   - `save` may return void (the bundled localStorage adapter does),
+      //     hence Promise.resolve.
+      //   - `seq` drops a write that settles out of order, so a slow earlier
+      //     write cannot pull `savedRef` back behind a later one.
+      //   - A rejection clears `pendingRef` without advancing `savedRef`, so
+      //     the next render or window change retries — which is how this
+      //     behaved before the set was tracked at all.
+      //   - An adapter that swallows its OWN failure resolves either way and
+      //     this cannot tell the two apart: it has to let the rejection reach
+      //     the shell. Every EFFICIENT portal adapter currently catches before
+      //     its `.then()`, so for those this is inert until they are changed.
+      const seq = ++writeSeq.current;
+      pendingRef.current = refs;
+      void Promise.resolve(save({ session_windows: refs }))
+        .then(() => {
+          if (seq !== writeSeq.current) return;
+          savedRef.current = refs;
+          pendingRef.current = null;
+        })
+        .catch(() => { if (seq === writeSeq.current) pendingRef.current = null; });
     }, SAVE_DEBOUNCE_MS);
     return () => clearTimeout(saveTimer.current);
   }, [openWindows, save]);

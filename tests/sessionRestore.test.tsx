@@ -16,6 +16,11 @@
  * change to the open windows is written now — `makeServerPrefs` is that
  * consumer, with a new `save` on every render as the portal's adapter has.
  *
+ * A write is recorded as saved only once it SETTLES. Recording it when it was
+ * fired meant a rejected save left the shell believing a lost write had landed,
+ * with every later comparison equal and no retry — `makeAsyncServerPrefs` holds
+ * a write open to pin that, and the no-double-write rule across the same gap.
+ *
  * Mounted like windowDirty.test.tsx: real WindowManagerProvider, MemoryRouter
  * + QueryClientProvider, a registry entry per scenario.
  */
@@ -107,6 +112,53 @@ function mount(adapter: ShellPrefsAdapter) {
 
 const settle = async (ms: number) => act(async () => { await new Promise(r => setTimeout(r, ms)); });
 
+/** Like `makeServerPrefs`, but each write is a promise the test settles by
+ *  hand, so the window between firing a save and it landing is observable.
+ *  A new `save` on every render, as the portal adapters have.
+ *
+ *  Note `settleWrite(false)` is the contract the shell needs from an adapter
+ *  that lets a failed PATCH reach it. The EFFICIENT portal adapters currently
+ *  catch their own rejection before returning, so there this resolves either
+ *  way — see the note in SessionRestore's persist effect. */
+function makeAsyncServerPrefs(initial: Record<string, unknown>) {
+  const server: Record<string, unknown> = { ...initial };
+  const writes: Record<string, unknown>[] = [];
+  const inflight: { resolve: () => void; reject: () => void }[] = [];
+  let bump = () => {};
+  function AsyncPrefsProvider({ children }: { children: ReactNode }) {
+    const [prefs, setPrefs] = useState<Record<string, unknown>>(() => ({ ...server }));
+    const [, setTick] = useState(0);
+    bump = () => setTick(t => t + 1);
+    const adapter: ShellPrefsAdapter = {
+      prefs,
+      save: patch => {
+        writes.push(patch);
+        return new Promise<void>((resolve, reject) => {
+          inflight.push({
+            resolve: () => {
+              Object.assign(server, patch);
+              setPrefs(prev => ({ ...prev, ...patch }));
+              resolve();
+            },
+            reject: () => reject(new Error('PATCH failed')),
+          });
+        });
+      },
+    };
+    return <ShellPrefsProvider value={adapter}>{children}</ShellPrefsProvider>;
+  }
+  return {
+    server, writes, AsyncPrefsProvider,
+    settleWrite: (ok: boolean) => act(async () => {
+      const write = inflight.shift();
+      assert.ok(write, 'expected a write in flight');
+      if (ok) write.resolve();
+      else write.reject();
+    }),
+    rerender: () => act(async () => { bump(); }),
+  };
+}
+
 test('a saved page window reopens on mount', async () => {
   const { adapter } = makePrefs({ session_windows: [{ type: 'page', route: ROUTE }] });
   const view = mount(adapter);
@@ -191,6 +243,49 @@ test('closing the window the user just opened, inside the debounce, writes nothi
   await act(async () => { opener!.closeEntity(`page:${OTHER_ROUTE}`); });
   await settle(900);
   assert.deepEqual(writes, []);
+  await act(async () => { view.unmount(); });
+});
+
+test('a rejected save leaves the saved set, so the next change writes again', async () => {
+  const { writes, server, AsyncPrefsProvider, settleWrite, rerender } = makeAsyncServerPrefs({});
+  const view = mountIn(AsyncPrefsProvider);
+  await settle(20);
+  await act(async () => { opener!.openPage(ROUTE); });
+  await settle(900);
+  assert.equal(writes.length, 1, 'the open is written once');
+  // The PATCH fails. Recording the set as saved here is what stranded the
+  // shell: every later comparison comes out equal and the write is never
+  // retried, so the server keeps the set from before the change.
+  await settleWrite(false);
+  assert.equal(server.session_windows, undefined, 'nothing reached the server');
+  // A render is all it takes to notice the desktop and the saved set differ.
+  await rerender();
+  await settle(900);
+  assert.equal(writes.length, 2, 'the lost write is retried');
+  assert.deepEqual(writes[1], { session_windows: [{ type: 'page', route: ROUTE }] });
+  await settleWrite(true);
+  assert.deepEqual(server.session_windows, [{ type: 'page', route: ROUTE }]);
+  await act(async () => { view.unmount(); });
+});
+
+test('a write still in flight is not fired a second time', async () => {
+  const { writes, AsyncPrefsProvider, settleWrite, rerender } = makeAsyncServerPrefs({});
+  const view = mountIn(AsyncPrefsProvider);
+  await settle(20);
+  await act(async () => { opener!.openPage(ROUTE); });
+  await settle(900);
+  assert.equal(writes.length, 1);
+  // The round-trip outlasts several renders, each handing over a new `save`.
+  // Waiting for the settle rather than the dispatch is what opens this window.
+  for (let i = 0; i < 3; i++) {
+    await rerender();
+    await settle(900);
+  }
+  assert.equal(writes.length, 1, 'the same set must not be written twice');
+  await settleWrite(true);
+  await rerender();
+  await settle(900);
+  assert.equal(writes.length, 1, 'and once it lands there is still nothing to write');
   await act(async () => { view.unmount(); });
 });
 
