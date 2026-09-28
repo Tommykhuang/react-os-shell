@@ -80,17 +80,18 @@ function Nav() {
 
 interface Options {
   initial?: string;
+  resolve?: ResolvePageTab;
   storageKey?: string;
   pinned?: string[];
   maxTabs?: number;
   confirmDiscard?: (tabs: PageTab[]) => Promise<boolean>;
 }
 
-function mount({ initial = '/a', storageKey, pinned, maxTabs, confirmDiscard }: Options = {}) {
+function mount({ initial = '/a', storageKey, pinned, maxTabs, confirmDiscard, resolve: resolveWith = resolve }: Options = {}) {
   return render(
     <MemoryRouter initialEntries={[initial]}>
       <PageTabsProvider
-        resolve={resolve}
+        resolve={resolveWith}
         storageKey={storageKey}
         pinned={pinned}
         maxTabs={maxTabs}
@@ -317,5 +318,60 @@ test('a hidden page is paused: its effects are cleaned up, and run again when sh
   assert.equal(listeners, 0, 'hidden: listener gone');
   click(tabButton(view.container, 'Page listen'));
   assert.equal(listeners, 1, 'shown: listener back');
+  view.unmount();
+});
+
+// ── Sizing: shrink like a browser's strip, never lose the way to close ─────
+
+const withIcons: ResolvePageTab = (loc) =>
+  loc.pathname === '/redirect'
+    ? null
+    : { title: `Page ${loc.pathname.slice(1)}`, icon: <svg data-icon={loc.pathname} /> };
+
+const wrapperOf = (c: HTMLElement, title: string) => tabButton(c, title).parentElement!;
+
+test('a pinned tab with an icon is the icon alone, and still named for assistive tech', () => {
+  const view = mount({ pinned: ['/c'], resolve: withIcons });
+  const pinned = tabButton(view.container, 'Page c');
+  assert.ok(pinned.querySelector('[data-icon="/c"]'), 'draws its icon');
+  const name = [...pinned.querySelectorAll('span')].find((s) => s.textContent === 'Page c');
+  assert.equal(name?.className, 'sr-only', 'the title is kept, visually hidden');
+  assert.equal(view.container.querySelector('[aria-label="Close Page c"]'), null);
+  view.unmount();
+});
+
+test('tabs share the width and shrink evenly, each deciding its own detail by its width', () => {
+  const view = mount({ resolve: withIcons });
+  navigateTo('/b');
+  for (const title of ['Page a', 'Page b']) {
+    const cls = wrapperOf(view.container, title).className;
+    assert.match(cls, /flex-\[0_1_15rem\]/, `${title} shrinks from 15rem rather than scrolling`);
+    assert.match(cls, /@container/, `${title} is a size container`);
+  }
+  view.unmount();
+});
+
+test('the tab on screen keeps its × however narrow; a narrow idle tab shows its × on hover', () => {
+  const view = mount({ resolve: withIcons });
+  navigateTo('/b');
+  const activeSlot = view.container.querySelector('[aria-label="Close Page b"]')!.parentElement!;
+  const idleSlot = view.container.querySelector('[aria-label="Close Page a"]')!.parentElement!;
+  assert.doesNotMatch(activeSlot.className, /@max-\[[^\]]+\]:hidden/);
+  // Narrow, the idle tab's × steps aside — and comes back under the pointer
+  // (Victor Mau: hovering a tab must always offer its ×).
+  assert.match(idleSlot.className, /@max-\[6\.5rem\]:hidden/);
+  assert.match(idleSlot.className, /@max-\[6\.5rem\]:group-hover:flex/);
+  view.unmount();
+});
+
+test('a hairline separates idle tabs, and none sits beside the active one', () => {
+  const view = mount({ resolve: withIcons });
+  navigateTo('/b');
+  navigateTo('/c');
+  click(tabButton(view.container, 'Page a'));
+  // a (active) | b | c  →  one hairline, between b and c.
+  const list = view.container.querySelector('[role="tablist"]')!;
+  const kinds = [...list.children].map((el) => (el.getAttribute('aria-hidden') === 'true' ? '|' : el.textContent));
+  assert.deepEqual(kinds, ['Page a', 'Page b', '|', 'Page c']);
   view.unmount();
 });
