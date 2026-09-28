@@ -212,7 +212,10 @@ export default function PageTabBar({ className, activeClassName, end }: PageTabB
 
           return (
             <Fragment key={tab.key}>
-              {divider && <span aria-hidden="true" className="mb-2.5 h-4 w-px shrink-0 self-end bg-gray-300" />}
+              {/* A border, not a fill: `border-gray-300` is the line every
+                  theme remaps (dark to --line-strong), and `bg-gray-300` has
+                  no dark remap, so it drew a light bar on the dark strip. */}
+              {divider && <span aria-hidden="true" className="mb-2.5 h-4 w-px shrink-0 self-end border-l border-gray-300" />}
               <div
                 role="presentation"
                 className={`${TAB_BASE} ${active ? TAB_FLOOR_ACTIVE : TAB_FLOOR_IDLE} ${colours}`}
