@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## 4.123.1
+
+- **`PageTabBar`: the hairline between two idle tabs no longer shows as a
+  bright bar in the dark theme.** It was filled with `bg-gray-300`, which the
+  dark sheet does not remap, so on the dark strip it kept the light gray-300.
+  It is now a `border-l border-gray-300` hairline. The light theme looks the
+  same, and in dark the line takes `--line-strong` like the kit's other strong
+  lines. The pink, green, grey and blue themes now tint it with their own line
+  colour, as they already tint the strip and the active tab's edge.
+
 ## 4.123.0
 
 - **`PageTabBar`: many tabs shrink, the way a browser's tab strip does, instead
