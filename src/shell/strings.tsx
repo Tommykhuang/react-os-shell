@@ -123,6 +123,25 @@ export interface ShellStrings {
     available: string;
     refreshNow: string;
   };
+  /** The page-tab strip (`react-os-shell/page-tabs`). */
+  pageTabs: {
+    /** The strip's accessible name. */
+    label: string;
+    /** A tab's close button, and the menu item: `"{close} {title}"` for the button. */
+    close: string;
+    closeOthers: string;
+    closeRight: string;
+    closeAll: string;
+    /** Marks a tab with unsaved changes (the dot's accessible text). */
+    unsaved: string;
+    /** Asked before a tab with unsaved changes closes. */
+    discardTitle: string;
+    discardOne: string;
+    /** Several at once — the count is prefixed by the caller: "3 pages have…". */
+    discardMany: string;
+    discardConfirm: string;
+    keepEditing: string;
+  };
 }
 
 export const DEFAULT_SHELL_STRINGS: ShellStrings = {
@@ -209,6 +228,19 @@ export const DEFAULT_SHELL_STRINGS: ShellStrings = {
   update: {
     available: 'A new version is available.',
     refreshNow: 'Refresh now',
+  },
+  pageTabs: {
+    label: 'Open pages',
+    close: 'Close',
+    closeOthers: 'Close other tabs',
+    closeRight: 'Close tabs to the right',
+    closeAll: 'Close all tabs',
+    unsaved: 'Unsaved changes',
+    discardTitle: 'Discard unsaved changes?',
+    discardOne: 'This page has changes that have not been saved. Close it anyway?',
+    discardMany: 'pages have changes that have not been saved. Close them anyway?',
+    discardConfirm: 'Discard and close',
+    keepEditing: 'Keep editing',
   },
 };
 

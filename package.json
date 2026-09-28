@@ -38,6 +38,11 @@
       "import": "./dist/file-intake/index.js",
       "default": "./dist/file-intake/index.js"
     },
+    "./page-tabs": {
+      "types": "./dist/page-tabs/index.d.ts",
+      "import": "./dist/page-tabs/index.js",
+      "default": "./dist/page-tabs/index.js"
+    },
     "./markdown": {
       "types": "./dist/markdown/index.d.ts",
       "import": "./dist/markdown/index.js"
