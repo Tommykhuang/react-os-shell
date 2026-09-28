@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useCallback, useMemo, useRef, useState, createContext, useContext, useSyncExternalStore, cloneElement, isValidElement, type ReactNode, type ReactElement } from 'react';
+import { useEffect, useLayoutEffect, useCallback, useMemo, useRef, useState, createContext, useContext, useSyncExternalStore, cloneElement, isValidElement, startTransition, type ReactNode, type ReactElement } from 'react';
 import { createPortal } from 'react-dom';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { confirm } from './ConfirmDialog';
@@ -2160,9 +2160,19 @@ export default function Modal({ open, onClose, title, icon, copyText, size = 'lg
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-detect dirty
+  //
+  // The flip is a TRANSITION so it renders after the event, never inside it.
+  // This listener runs in the capture phase, ahead of React's own onChange, and
+  // a plain setState from a native `input` listener is a sync update that React
+  // flushes in the microtask right after this handler returns — still before
+  // React has read the keystroke. A nested dialog's first dirty flip re-renders
+  // the enclosing window (useWindowDirty below), that re-renders the form, and
+  // every controlled input is reset to its old state: the first key typed into
+  // a fresh create dialog vanished. Later keys were fine because `touched` was
+  // already true and the set bailed out.
   useEffect(() => {
     if (!open || dirty !== 'auto') return;
-    const handler = (e: Event) => { if (panelRef.current?.contains(e.target as HTMLElement)) setTouched(true); };
+    const handler = (e: Event) => { if (panelRef.current?.contains(e.target as HTMLElement)) startTransition(() => setTouched(true)); };
     document.addEventListener('input', handler, true);
     document.addEventListener('change', handler, true);
     return () => { document.removeEventListener('input', handler, true); document.removeEventListener('change', handler, true); };
