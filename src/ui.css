@@ -1113,6 +1113,12 @@ html.rosh-reduce-transparency *::after {
 [data-theme="dark"] .border-gray-300 { border-color: var(--line-strong) !important; }
 [data-theme="dark"] .border-gray-100 { border-color: var(--line-subtle) !important; }
 
+/* Rings. `ring-gray-100` is a cut-out rather than a line: it rings a mark in
+   the colour of the `bg-gray-100` surface under it (PageTabBar's unsaved dot,
+   on the tab strip), so it takes that surface's token. Without this it kept
+   its light gray and drew a pale halo on the dark strip. */
+[data-theme="dark"] .ring-gray-100 { --tw-ring-color: var(--surface) !important; }
+
 /* Cards, shadows, tables */
 [data-theme="dark"] .shadow { --tw-shadow-color: rgba(0,0,0,0.4) !important; }
 [data-theme="dark"] .shadow-lg { --tw-shadow-color: rgba(0,0,0,0.5) !important; }
