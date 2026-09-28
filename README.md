@@ -690,7 +690,7 @@ cleaned up until it is shown again; on React 18 it is only hidden.
 | Export | Notes |
 |---|---|
 | `PageTabsProvider` | Props: `resolve`, `pinned`, `storageKey`, `maxTabs` (12), `enabled` (off on phones), `confirmDiscard`. Needs `ConfirmProvider` for the default unsaved-changes question. |
-| `PageTabBar` | The strip — it can be the app's whole top bar. Click, ×, middle-click, Delete; right-click for Close / Close other tabs / Close tabs to the right / Close all; arrow keys along it. `end` holds controls at its right that do not scroll with the tabs; the active tab takes the page's background (`activeClassName` if yours is not `bg-gray-50`). |
+| `PageTabBar` | The strip — it can be the app's whole top bar. Many tabs shrink evenly like a browser's (title fades, then an idle tab's × waits for hover, then icon only; pinned tabs are icon-only) and only scroll at their floor. Click, ×, middle-click, Delete; right-click for Close / Close other tabs / Close tabs to the right / Close all; arrow keys along it. `end` holds controls at its right that do not scroll with the tabs; the active tab takes the page's background (`activeClassName` if yours is not `bg-gray-50`). |
 | `PageTabsOutlet` | Renders `children(location)` once per open tab. The frame is the page's scroll container; scroll positions inside it come back with the tab. |
 | `usePageTabTitle(title)` | Name this page's tab (a record's number once loaded). |
 | `usePageTabDirty(dirty)` | Mark unsaved changes: closing asks first, and so does a reload. |

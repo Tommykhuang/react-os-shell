@@ -7,6 +7,8 @@
  * Close all. A tab with unsaved changes shows a dot where its × would be and
  * asks before it goes.
  *
+ * Many tabs shrink rather than scroll, as a browser's do (see TAB_BASE).
+ *
  * Keyboard: the strip is one tab stop and the arrow keys move along it (Home /
  * End to the ends) — the roving-tabindex tablist pattern the kit's `Tabs` uses.
  * Moving focus does not switch pages; Enter or Space does, because switching
@@ -20,7 +22,7 @@
  *
  * Renders nothing when tabs are off (`enabled={false}` on the provider).
  */
-import { useContext, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
+import { Fragment, useContext, useEffect, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 
 import { PopupMenu, PopupMenuDivider, PopupMenuItem } from '../shell/PopupMenu';
 import { useShellStrings } from '../shell/strings';
@@ -41,15 +43,39 @@ export interface PageTabBarProps {
 
 const STRIP = 'relative flex h-10 shrink-0 items-end gap-3 bg-gray-100 px-3';
 
-/** The tabs scroll sideways inside this; the scrollbar is hidden (a wheel or
- *  a trackpad still scrolls it, and the active tab is kept in view). */
+/** The tabs sit in this. It scrolls sideways only once every tab is at its
+ *  narrowest; the scrollbar is hidden (a wheel or a trackpad still scrolls it,
+ *  and the active tab is kept in view). */
 const TABLIST =
-  'flex min-w-0 flex-1 items-end gap-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden';
+  'flex min-w-0 flex-1 items-end overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden';
 
+/**
+ * Sizing, the way a browser's tab strip does it. Every tab asks for 15rem and
+ * all of them shrink evenly as more open (`flex: 0 1 15rem`), so a strip of
+ * twelve tabs fits where it used to scroll. Each tab is a size container
+ * (`@container`) and gives detail up as it narrows: its title fades at the
+ * edge, then an idle tab's × steps aside until the pointer is over the tab,
+ * then its title goes, until only the icon is left. The tab on screen keeps
+ * its × however narrow it gets, and hovering any tab shows its × — closing a
+ * page is always one click. Pinned tabs are icon-only.
+ */
 const TAB_BASE =
-  'group relative flex h-9 min-w-0 max-w-[15rem] shrink-0 items-center rounded-t-md border border-b-0 text-[13px] transition-colors';
+  'group @container relative flex h-9 flex-[0_1_15rem] items-center rounded-t-md border border-b-0 text-[13px] transition-colors';
+/** Floors: an icon for an idle tab; an icon and its × for the active one. */
+const TAB_FLOOR_IDLE = 'min-w-[2.75rem]';
+const TAB_FLOOR_ACTIVE = 'min-w-[4.25rem]';
+const TAB_PINNED =
+  'group relative flex h-9 flex-none items-center justify-center rounded-t-md border border-b-0 transition-colors';
 const TAB_ACTIVE = 'z-[1] border-gray-200 bg-gray-50 text-gray-900';
 const TAB_IDLE = 'border-transparent text-gray-600 hover:bg-gray-200/70 hover:text-gray-900';
+
+/** A title that runs out of room fades rather than ending in "…" — the
+ *  browser's treatment, and it reads more of the word. */
+const TITLE =
+  'min-w-0 flex-1 overflow-hidden whitespace-nowrap [mask-image:linear-gradient(to_right,#000_calc(100%-1rem),transparent)]';
+
+const ICON_WRAP = 'relative flex size-4 shrink-0 items-center justify-center text-gray-500 [&>svg]:size-4';
+const FOCUS_RING = 'outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500';
 
 function CloseIcon() {
   return (
@@ -134,49 +160,82 @@ export default function PageTabBar({ className, activeClassName, end }: PageTabB
         onKeyDown={onKeyDown}
         className={TABLIST}
       >
-        {tabs.map((tab) => {
+        {tabs.map((tab, i) => {
           const active = tab.key === activeKey;
           const dirty = state.dirty.includes(tab.key);
           const icon = resolve(parseTabPath(tab.path))?.icon;
+          const colours = active ? (activeClassName ?? TAB_ACTIVE) : TAB_IDLE;
+          // A hairline between two idle tabs, as the browser draws; none
+          // beside the active tab, whose own edges already separate it.
+          const divider = i > 0 && !active && tabs[i - 1].key !== activeKey;
+          const tabButton = {
+            type: 'button' as const,
+            role: 'tab',
+            id: idFor(tab.key, 'tab'),
+            'aria-selected': active,
+            'aria-controls': state.mounted.includes(tab.key) ? idFor(tab.key, 'panel') : undefined,
+            tabIndex: tab.key === focusKey ? 0 : -1,
+            title: tab.title,
+            onClick: () => activate(tab.key),
+          };
+          const handlers = {
+            onContextMenu: (e: MouseEvent) => onContextMenu(e, tab),
+            onAuxClick: (e: MouseEvent) => onAuxClick(e, tab),
+            // A middle-press would otherwise start the browser's autoscroll.
+            onMouseDown: (e: MouseEvent) => {
+              if (e.button === 1) e.preventDefault();
+            },
+          };
+          const iconEl = icon && (
+            // The consumer's nav icons, whatever size they were drawn at for
+            // the sidebar, sit at the strip's size here.
+            <span className={ICON_WRAP} aria-hidden="true">
+              {icon}
+              {dirty && !active && !tab.pinned && (
+                // Unsaved work on a tab too narrow for its × slot: the dot
+                // moves onto the icon.
+                <span className="absolute -right-1 -top-1 hidden size-2 rounded-full bg-gray-500 ring-2 ring-gray-100 @max-[6.5rem]:block @max-[6.5rem]:group-hover:hidden" />
+              )}
+            </span>
+          );
+
+          if (tab.pinned) {
+            return (
+              <div key={tab.key} role="presentation" className={`${TAB_PINNED} ${icon ? 'w-10' : ''} ${colours}`} {...handlers}>
+                <button {...tabButton} className={`flex h-full items-center justify-center rounded-t-md ${icon ? 'w-full' : 'px-3'} ${FOCUS_RING}`}>
+                  {iconEl}
+                  <span className={icon ? 'sr-only' : 'whitespace-nowrap text-[13px]'}>{tab.title}</span>
+                </button>
+              </div>
+            );
+          }
+
           return (
-            <div
-              key={tab.key}
-              role="presentation"
-              className={`${TAB_BASE} ${active ? (activeClassName ?? TAB_ACTIVE) : TAB_IDLE}`}
-              onContextMenu={(e) => onContextMenu(e, tab)}
-              onAuxClick={(e) => onAuxClick(e, tab)}
-              // A middle-press would otherwise start the browser's autoscroll.
-              onMouseDown={(e) => {
-                if (e.button === 1) e.preventDefault();
-              }}
-            >
-              <button
-                type="button"
-                role="tab"
-                id={idFor(tab.key, 'tab')}
-                aria-selected={active}
-                aria-controls={state.mounted.includes(tab.key) ? idFor(tab.key, 'panel') : undefined}
-                tabIndex={tab.key === focusKey ? 0 : -1}
-                title={tab.title}
-                onClick={() => activate(tab.key)}
-                className={`flex h-full min-w-0 flex-1 items-center gap-2 rounded-t-md pl-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500 ${
-                  tab.pinned ? 'pr-3' : 'pr-1'
-                }`}
+            <Fragment key={tab.key}>
+              {divider && <span aria-hidden="true" className="mb-2.5 h-4 w-px shrink-0 self-end bg-gray-300" />}
+              <div
+                role="presentation"
+                className={`${TAB_BASE} ${active ? TAB_FLOOR_ACTIVE : TAB_FLOOR_IDLE} ${colours}`}
+                {...handlers}
               >
-                {icon && (
-                  // The consumer's nav icons, whatever size they were drawn
-                  // at for the sidebar, sit at the strip's size here.
-                  <span
-                    className="flex size-4 shrink-0 items-center justify-center text-gray-500 [&>svg]:size-4"
-                    aria-hidden="true"
-                  >
-                    {icon}
+                <button
+                  {...tabButton}
+                  className={`flex h-full min-w-0 flex-1 items-center gap-2 rounded-t-md pl-3 pr-1 text-left ${FOCUS_RING} ${
+                    active
+                      ? '@max-[5rem]:pl-2.5'
+                      : '@max-[6.5rem]:pr-3 @max-[6.5rem]:group-hover:pr-1 @max-[4.5rem]:justify-center @max-[4.5rem]:px-0 @max-[4.5rem]:group-hover:pl-1.5'
+                  }`}
+                >
+                  {iconEl}
+                  <span className={`${TITLE} ${icon ? (active ? '@max-[5rem]:sr-only' : '@max-[4.5rem]:sr-only') : ''}`}>
+                    {tab.title}
                   </span>
-                )}
-                <span className="truncate">{tab.title}</span>
-              </button>
-              {!tab.pinned && (
-                <span className="mr-1.5 flex size-5 shrink-0 items-center justify-center">
+                </button>
+                <span
+                  className={`mr-1.5 flex size-5 shrink-0 items-center justify-center ${
+                    active ? '' : '@max-[6.5rem]:hidden @max-[6.5rem]:group-hover:flex'
+                  }`}
+                >
                   {dirty && (
                     <span
                       role="img"
@@ -196,8 +255,8 @@ export default function PageTabBar({ className, activeClassName, end }: PageTabB
                     <CloseIcon />
                   </button>
                 </span>
-              )}
-            </div>
+              </div>
+            </Fragment>
           );
         })}
       </div>
