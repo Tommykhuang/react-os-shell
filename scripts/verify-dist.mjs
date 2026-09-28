@@ -157,6 +157,22 @@ if (!existsSync(FILE_INTAKE_ENTRY)) {
   if (graph.size < 2) note(`the file-intake entry graph is only ${graph.size} file(s); expected its chunk`);
 }
 
+// The page-tabs entry is the kit's peers plus the router — the one thing it
+// needs that the kit does not have. It exists for a routed app built on the kit
+// (the dealer portal, the customer portal since it left the desktop), so a
+// window-manager or react-query edge arriving through a shared chunk would put
+// the desktop back into exactly the apps that removed it.
+const PAGE_TABS_ENTRY = join(root, 'dist/page-tabs/index.js');
+if (!existsSync(PAGE_TABS_ENTRY)) {
+  note('dist/page-tabs/index.js does not exist — did tsup lose the src/page-tabs entry?');
+} else {
+  walkEntry(
+    PAGE_TABS_ENTRY,
+    new Set([...ALLOWED_BARE, 'react-router-dom']),
+    'react-os-shell/page-tabs may reach react, react-dom and react-router-dom only.',
+  );
+}
+
 // ── 2b. …and the parser must not leak the OTHER way ─────────────────────────
 //
 // react-markdown reaching the root or the ui entry would quietly promote an

@@ -657,6 +657,49 @@ so an app importing from both has one hook.
 | `FileIntakeAlert` | The rejection list as `role="alert"`, styled with Tailwind utilities (`text-xs text-red-600`). A page whose Tailwind does not scan this package renders `rejections` itself, as above — keep the `role="alert"`. |
 | `FileIntakeOptions`, `FileIntakeLimits`, `FileRejection`, `FileRejectionReason` | Types. |
 
+### Open pages as tabs — `react-os-shell/page-tabs`
+
+For a routed app — a sidebar, a header, one page at a time — that wants what
+windows gave the desktop: several pages open at once, each keeping its place.
+Every page opened becomes a tab under the header, and the pages behind the
+other tabs stay mounted.
+
+```tsx
+import { PageTabBar, PageTabsOutlet, PageTabsProvider } from 'react-os-shell/page-tabs';
+
+<PageTabsProvider
+  key={user.id}                      // a saved strip belongs to one user
+  storageKey={`tabs:u${user.id}`}
+  resolve={(loc) => (loc.pathname.startsWith('/open/') ? null : { title: titleFor(loc) })}
+  pinned={['/dashboard']}
+>
+  <Header />
+  <PageTabBar />
+  <PageTabsOutlet frameClassName="min-h-0 flex-1 overflow-y-auto p-6">
+    {(location) => <Routes location={location}>{contentRoutes}</Routes>}
+  </PageTabsOutlet>
+</PageTabsProvider>
+```
+
+The address stays the source of truth: `resolve` decides which locations are
+tabs (by default one tab per pathname, so a list's filters move within its
+tab), and clicking a tab navigates to its last address. On React 19.2+ each
+hidden page sits in `<Activity mode="hidden">` — its state kept, its effects
+cleaned up until it is shown again; on React 18 it is only hidden.
+
+| Export | Notes |
+|---|---|
+| `PageTabsProvider` | Props: `resolve`, `pinned`, `storageKey`, `maxTabs` (12), `enabled` (off on phones), `confirmDiscard`. Needs `ConfirmProvider` for the default unsaved-changes question. |
+| `PageTabBar` | The strip — it can be the app's whole top bar. Click, ×, middle-click, Delete; right-click for Close / Close other tabs / Close tabs to the right / Close all; arrow keys along it. `end` holds controls at its right that do not scroll with the tabs; the active tab takes the page's background (`activeClassName` if yours is not `bg-gray-50`). |
+| `PageTabsOutlet` | Renders `children(location)` once per open tab. The frame is the page's scroll container; scroll positions inside it come back with the tab. |
+| `usePageTabTitle(title)` | Name this page's tab (a record's number once loaded). |
+| `usePageTabDirty(dirty)` | Mark unsaved changes: closing asks first, and so does a reload. |
+| `usePageTab()` | `{ key, close({ to, force }) }` — a form that created its record closes itself and goes to it. |
+| `usePageTabs()` | The strip, from outside any one page. |
+
+It reaches `react`, `react-dom` and `react-router-dom` only — never the window
+manager — and `scripts/verify-dist.mjs` checks that against the build.
+
 ### Misc
 
 | Export | Notes |

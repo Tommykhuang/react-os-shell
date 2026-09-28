@@ -28,6 +28,10 @@ export default defineConfig({
   // a chunk the ui entry shares, so the hook stays ONE instance for an app
   // importing from both. `scripts/verify-dist.mjs` holds the built graph to
   // React only.
+  // `src/page-tabs` is its own entry because it needs react-router-dom, which
+  // the kit must not, and none of the window manager, which a routed app has
+  // dropped. Same config for the same reason as the rest: the strings catalog
+  // and the confirm dialog it shares with the kit stay one instance.
   entry: [
     'src/index.ts',
     'src/apps/index.ts',
@@ -35,6 +39,7 @@ export default defineConfig({
     'src/ui/index.ts',
     'src/markdown/index.tsx',
     'src/file-intake/index.ts',
+    'src/page-tabs/index.ts',
   ],
   format: ['esm'],
   dts: true,
