@@ -257,13 +257,20 @@ test('a dirty PageWindow registration uses the existing Modal close confirmation
   assert.ok(document.querySelector(panelSelector()), 'canceling the existing confirmation keeps the page open');
 });
 
-function typeInNestedDialog(text: string) {
+/**
+ * Type into the dialog, then let its report reach the window. The dialog sets
+ * its own flag at once but renders the report one timer turn after the input
+ * event (a render inside the event reset the field being typed into; see
+ * Modal's auto-dirty listener), so the turn is part of typing here.
+ */
+async function typeInNestedDialog(text: string) {
   const field = document.querySelector<HTMLInputElement>('[data-testid="nested-field"]');
   assert.ok(field, 'the dialog field exists');
   act(() => {
     field.value = text;
     field.dispatchEvent(new Event('input', { bubbles: true }));
   });
+  await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0); }); });
 }
 
 test('a window whose dialog holds unsaved edits asks before closing', async (t) => {
@@ -273,7 +280,7 @@ test('a window whose dialog holds unsaved edits asks before closing', async (t) 
   // Nothing typed yet: the window is clean and closes without a question.
   assert.doesNotMatch(document.body.textContent ?? '', /Discard changes\?/);
 
-  typeInNestedDialog('half-written');
+  await typeInNestedDialog('half-written');
   await flush();
 
   // The taskbar route — the one "Close all" uses. The dialog is not a taskbar
@@ -296,7 +303,7 @@ test('closing the dialog clears the window it reported to', async (t) => {
   const mounted = await mountPage(NESTED_ROUTE);
   t.after(() => mounted.unmount());
 
-  typeInNestedDialog('half-written');
+  await typeInNestedDialog('half-written');
   await flush();
   clickTestButton('nested-close');
   await flush();

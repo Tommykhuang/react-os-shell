@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useCallback, useMemo, useRef, useState, createContext, useContext, useSyncExternalStore, cloneElement, isValidElement, startTransition, type ReactNode, type ReactElement } from 'react';
+import { useEffect, useLayoutEffect, useCallback, useMemo, useRef, useState, createContext, useContext, useSyncExternalStore, cloneElement, isValidElement, type ReactNode, type ReactElement } from 'react';
 import { createPortal } from 'react-dom';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { confirm } from './ConfirmDialog';
@@ -1390,6 +1390,9 @@ export default function Modal({ open, onClose, title, icon, copyText, size = 'lg
    *  title carries no plain text (icon-only nodes), so no empty tooltip is attached. */
   const titleTooltip = useMemo(() => extractTitleText(displayTitle).trim() || undefined, [displayTitle]);
   const [touched, setTouched] = useState(false);
+  // Set synchronously by the auto-dirty listener below; `touched` follows once
+  // the event is over. The close guard reads both, so there is no gap.
+  const touchedRef = useRef(false);
   const [pinnedOnTop, setPinnedOnTop] = useState(false);
   const [windowMenu, setWindowMenu] = useState<{ x: number; y: number } | null>(null);
   // "Add to Desktop" — spec provided by the WindowManager around each open
@@ -2133,6 +2136,7 @@ export default function Modal({ open, onClose, title, icon, copyText, size = 'lg
   useEffect(() => {
     if (!open) return;
     setTouched(false);
+    touchedRef.current = false;
     closingRef.current = false;
     setAutoWidthResolved(!fitWidth);
     // If we have a saved position in the store, restore it instead of resetting.
@@ -2161,21 +2165,35 @@ export default function Modal({ open, onClose, title, icon, copyText, size = 'lg
 
   // Auto-detect dirty
   //
-  // The flip is a TRANSITION so it renders after the event, never inside it.
-  // This listener runs in the capture phase, ahead of React's own onChange, and
-  // a plain setState from a native `input` listener is a sync update that React
-  // flushes in the microtask right after this handler returns — still before
-  // React has read the keystroke. A nested dialog's first dirty flip re-renders
-  // the enclosing window (useWindowDirty below), that re-renders the form, and
-  // every controlled input is reset to its old state: the first key typed into
-  // a fresh create dialog vanished. Later keys were fine because `touched` was
+  // The state flip waits until the event is over. This listener runs in the
+  // capture phase, ahead of React's own onChange, and a plain setState from a
+  // native `input` listener is a sync update that React flushes in the
+  // microtask right after this handler returns — still before React has read
+  // the keystroke. A nested dialog's first dirty flip re-renders the enclosing
+  // window (useWindowDirty below), that re-renders the form, and every
+  // controlled input is reset to its old state: the first key typed into a
+  // fresh create dialog vanished. Later keys were fine because `touched` was
   // already true and the set bailed out.
+  //
+  // A timer, not startTransition: every keystroke interrupts and restarts a
+  // transition, so on a slow machine it did not land until typing stopped, and
+  // an Escape in that gap closed the dialog without asking. The ref makes this
+  // dialog's own guard exact; the timer's render only has to reach the window.
   useEffect(() => {
     if (!open || dirty !== 'auto') return;
-    const handler = (e: Event) => { if (panelRef.current?.contains(e.target as HTMLElement)) startTransition(() => setTouched(true)); };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const handler = (e: Event) => {
+      if (!panelRef.current?.contains(e.target as HTMLElement) || touchedRef.current) return;
+      touchedRef.current = true;
+      timer = setTimeout(() => setTouched(true), 0);
+    };
     document.addEventListener('input', handler, true);
     document.addEventListener('change', handler, true);
-    return () => { document.removeEventListener('input', handler, true); document.removeEventListener('change', handler, true); };
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener('input', handler, true);
+      document.removeEventListener('change', handler, true);
+    };
   }, [open, dirty]);
 
   const isDirty = dirty === 'auto' ? touched : dirty === true;
@@ -2200,7 +2218,7 @@ export default function Modal({ open, onClose, title, icon, copyText, size = 'lg
 
   const guardedClose = useCallback(async () => {
     if (closingRef.current) return;
-    if (isDirty) {
+    if (isDirty || (dirty === 'auto' && touchedRef.current)) {
       closingRef.current = true;
       // Name the window. One close asks one question, but "Close all" on a
       // grouped taskbar tab fires a close per instance, and confirms QUEUE
@@ -2222,7 +2240,7 @@ export default function Modal({ open, onClose, title, icon, copyText, size = 'lg
       if (!ok) return;
     }
     onClose();
-  }, [isDirty, onClose, titleTooltip]);
+  }, [isDirty, dirty, onClose, titleTooltip]);
 
   // Shell chrome outside the panel (taskbar tabs and their previews) cannot
   // call this Modal's guardedClose directly. Route keyed close requests back
@@ -2601,7 +2619,7 @@ export default function Modal({ open, onClose, title, icon, copyText, size = 'lg
       // mounted window's receiver answered it, and one Cmd+S saved (or
       // duplicated) every open form at once. Receivers match on this id; see
       // useModalSave / useModalDuplicate.
-      if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); document.dispatchEvent(new CustomEvent('modal-save', { detail: { modalId } })); setTouched(false); }
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); document.dispatchEvent(new CustomEvent('modal-save', { detail: { modalId } })); touchedRef.current = false; setTouched(false); }
       else if (e.altKey && e.shiftKey && (e.code === 'KeyD' || e.key === 'D' || e.key === 'd')) { e.preventDefault(); document.dispatchEvent(new CustomEvent('modal-duplicate', { detail: { modalId } })); }
     };
     window.addEventListener('keydown', handler, true);

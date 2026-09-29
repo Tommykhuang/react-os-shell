@@ -32,5 +32,19 @@ export default async function check(page, { pageErrors }) {
   const dialog = page.getByRole('dialog');
   await dialog.waitFor();
   await assert.doesNotReject(() => dialog.getByText('Discard changes?').waitFor());
+  await page.getByRole('button', { name: 'Discard' }).click();
+  await input.waitFor({ state: 'detached' });
+
+  // And it lands at once. One key and an Escape straight after it must still
+  // ask: the state render comes after the event, and a close in that gap is
+  // exactly where a deferred flag would let edits go without a word. (A
+  // transition fell into it on CI, where every key restarted the render.)
+  await page.getByTestId('new').click();
+  await input.click();
+  await page.keyboard.type('7');
+  await page.keyboard.press('Escape');
+  await dialog.waitFor();
+  await assert.doesNotReject(() => dialog.getByText('Discard changes?').waitFor());
+  assert.equal(await input.inputValue(), '7');
   assert.deepEqual(pageErrors, []);
 }
